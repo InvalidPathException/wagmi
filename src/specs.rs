@@ -196,3 +196,145 @@ mod opcodes {
     );
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum WasmValue {
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
+}
+
+impl WasmValue {
+    pub fn from_i32(value: i32) -> Self { WasmValue::I32(value) }
+    pub fn from_i64(value: i64) -> Self { WasmValue::I64(value) }
+    pub fn from_f32(value: f32) -> Self { WasmValue::F32(value) }
+    pub fn from_f64(value: f64) -> Self { WasmValue::F64(value) }
+    pub fn to_i32(&self) -> Option<i32> { if let WasmValue::I32(v) = *self { Some(v) } else { None } }
+    pub fn to_i64(&self) -> Option<i64> { if let WasmValue::I64(v) = *self { Some(v) } else { None } }
+    pub fn to_f32(&self) -> Option<f32> { if let WasmValue::F32(v) = *self { Some(v) } else { None } }
+    pub fn to_f64(&self) -> Option<f64> { if let WasmValue::F64(v) = *self { Some(v) } else { None } }
+    pub fn f32_to_i32_trunc(value: f32) -> Option<i32> {
+        (value.is_finite() && value >= i32::MIN as f32 && value <= i32::MAX as f32).then(|| value as i32)
+    }
+    pub fn f32_to_i64_trunc(value: f32) -> Option<i64> {
+        (value.is_finite() && value >= i64::MIN as f32 && value <= i64::MAX as f32).then(|| value as i64)
+    }
+    pub fn f64_to_i32_trunc(value: f64) -> Option<i32> {
+        (value.is_finite() && value >= i32::MIN as f64 && value <= i32::MAX as f64).then(|| value as i32)
+    }
+    pub fn f64_to_i64_trunc(value: f64) -> Option<i64> {
+        (value.is_finite() && value >= i64::MIN as f64 && value <= i64::MAX as f64).then(|| value as i64)
+    }
+    pub fn i32_to_f32(value: i32) -> f32 { value as f32 }
+    pub fn i32_to_f64(value: i32) -> f64 { value as f64 }
+    pub fn i64_to_f32(value: i64) -> f32 { value as f32 }
+    pub fn i64_to_f64(value: i64) -> f64 { value as f64 }
+    pub fn f32_to_f64(value: f32) -> f64 { value as f64 }
+    pub fn f64_to_f32(value: f64) -> f32 { value as f32 }
+    pub fn i32_to_f32_reinterpret(value: i32) -> f32 { f32::from_bits(value as u32) }
+    pub fn f32_to_i32_reinterpret(value: f32) -> i32 { value.to_bits() as i32 }
+    pub fn i64_to_f64_reinterpret(value: i64) -> f64 { f64::from_bits(value as u64) }
+    pub fn f64_to_i64_reinterpret(value: f64) -> i64 { value.to_bits() as i64 }
+}
+
+#[macro_export]
+macro_rules! binary_op {
+    ($stack:expr, I32, $op:tt) => {{
+        let arg1 = $stack.pop().expect("Stack underflow");
+        let arg2 = $stack.pop().expect("Stack underflow");
+        let val1 = arg1.to_i32().expect("Wrong type (expected i32)");
+        let val2 = arg2.to_i32().expect("Wrong type (expected i32)");
+        let result = val2 $op val1;
+        $stack.push(WasmValue::I32(result));
+    }};
+    ($stack:expr, I64, $op:tt) => {{
+        let arg1 = $stack.pop().expect("Stack underflow");
+        let arg2 = $stack.pop().expect("Stack underflow");
+        let val1 = arg1.to_i64().expect("Wrong type (expected i64)");
+        let val2 = arg2.to_i64().expect("Wrong type (expected i64)");
+        let result = val2 $op val1;
+        $stack.push(WasmValue::I64(result));
+    }};
+    ($stack:expr, F32, $op:tt) => {{
+        let arg1 = $stack.pop().expect("Stack underflow");
+        let arg2 = $stack.pop().expect("Stack underflow");
+        let val1 = arg1.to_f32().expect("Wrong type (expected f32)");
+        let val2 = arg2.to_f32().expect("Wrong type (expected f32)");
+        let result = val2 $op val1;
+        $stack.push(WasmValue::F32(result));
+    }};
+    ($stack:expr, F64, $op:tt) => {{
+        let arg1 = $stack.pop().expect("Stack underflow");
+        let arg2 = $stack.pop().expect("Stack underflow");
+        let val1 = arg1.to_f64().expect("Wrong type (expected f64)");
+        let val2 = arg2.to_f64().expect("Wrong type (expected f64)");
+        let result = val2 $op val1;
+        $stack.push(WasmValue::F64(result));
+    }};
+}
+
+#[macro_export]
+macro_rules! binary_cmp {
+    ($stack:expr, I32, $op:tt) => {{
+        let arg1 = $stack.pop().expect("Stack underflow");
+        let arg2 = $stack.pop().expect("Stack underflow");
+        let val1 = arg1.to_i32().expect("Wrong type (expected i32)");
+        let val2 = arg2.to_i32().expect("Wrong type (expected i32)");
+        let result = if val2 $op val1 { 1 } else { 0 };
+        $stack.push(WasmValue::I32(result));
+    }};
+    ($stack:expr, I64, $op:tt) => {{
+        let arg1 = $stack.pop().expect("Stack underflow");
+        let arg2 = $stack.pop().expect("Stack underflow");
+        let val1 = arg1.to_i64().expect("Wrong type (expected i64)");
+        let val2 = arg2.to_i64().expect("Wrong type (expected i64)");
+        let result = if val2 $op val1 { 1 } else { 0 };
+        $stack.push(WasmValue::I32(result));
+    }};
+    ($stack:expr, F32, $op:tt) => {{
+        let arg1 = $stack.pop().expect("Stack underflow");
+        let arg2 = $stack.pop().expect("Stack underflow");
+        let val1 = arg1.to_f32().expect("Wrong type (expected f32)");
+        let val2 = arg2.to_f32().expect("Wrong type (expected f32)");
+        let result = if val2 $op val1 { 1 } else { 0 };
+        $stack.push(WasmValue::I32(result));
+    }};
+    ($stack:expr, F64, $op:tt) => {{
+        let arg1 = $stack.pop().expect("Stack underflow");
+        let arg2 = $stack.pop().expect("Stack underflow");
+        let val1 = arg1.to_f64().expect("Wrong type (expected f64)");
+        let val2 = arg2.to_f64().expect("Wrong type (expected f64)");
+        let result = if val2 $op val1 { 1 } else { 0 };
+        $stack.push(WasmValue::I32(result));
+    }};
+}
+
+#[macro_export]
+macro_rules! unary_fn {
+    ($stack:expr, I32, $fn:path) => {{
+        let arg = $stack.pop().expect("Stack underflow");
+        let val = arg.to_i32().expect("Wrong type (expected i32)");
+        let result = $fn(val);
+        $stack.push(WasmValue::I32(result));
+    }};
+    ($stack:expr, I64, $fn:path) => {{
+        let arg = $stack.pop().expect("Stack underflow");
+        let val = arg.to_i64().expect("Wrong type (expected i64)");
+        let result = $fn(val);
+        $stack.push(WasmValue::I64(result));
+    }};
+    ($stack:expr, F32, $fn:path) => {{
+        let arg = $stack.pop().expect("Stack underflow");
+        let val = arg.to_f32().expect("Wrong type (expected f32)");
+        let result = $fn(val);
+        $stack.push(WasmValue::F32(result));
+    }};
+    ($stack:expr, F64, $fn:path) => {{
+        let arg = $stack.pop().expect("Stack underflow");
+        let val = arg.to_f64().expect("Wrong type (expected f64)");
+        let result = $fn(val);
+        $stack.push(WasmValue::F64(result));
+    }};
+}
+
+
