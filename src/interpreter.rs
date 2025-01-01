@@ -1,14 +1,20 @@
 use crate::leb128::leb128;
 use crate::specs::{op_impl, opcodes::Opcode, WasmValue};
 use crate::{binary_fn, div_f, div_s, div_u, memory_load, rem_s, rem_u, unary_fn};
+use std::io::Read;
 
-fn execute_opcode(opcode: Opcode, stack: &mut Vec<WasmValue>, memory: &mut Vec<u8>) {
+fn execute_opcode(
+    opcode: Opcode,
+    stack: &mut Vec<WasmValue>,
+    memory: &mut Vec<u8>,
+    iter: &mut &[u8],
+) {
     match opcode {
         Opcode::UNREACHABLE => {
-            // Code for UNREACHABLE
+            panic!("Unreachable executed");
         }
         Opcode::NOP => {
-            // Code for NOP
+            // DO NOTHING
         }
         Opcode::BLOCK => {
             // Code for BLOCK
@@ -152,22 +158,44 @@ fn execute_opcode(opcode: Opcode, stack: &mut Vec<WasmValue>, memory: &mut Vec<u
             // Code for I64_STORE32
         }
         Opcode::MEMORY_SIZE => {
-            // Code for MEMORY_SIZE
+            stack.push(WasmValue::I32(memory.len() as i32));
         }
         Opcode::MEMORY_GROW => {
-            // Code for MEMORY_GROW
+            let n_pages = stack
+                .pop()
+                .expect("Stack underflow from grow")
+                .to_i32()
+                .expect("Expected i32 operand") as usize;
+
+            let new_size = memory.len() / 65535 + n_pages;
+            if n_pages > 0 && new_size <= 1024 {
+                memory.resize(new_size * 65535, 0);
+                stack.push(WasmValue::I32((new_size - n_pages) as i32));
+            } else {
+                stack.push(WasmValue::I32(-1));
+            }
         }
         Opcode::I32_CONST => {
-            // Code for I32_CONST
+            stack.push(WasmValue::I32(
+                leb128::read_leb128_s(iter).expect("Failed to read i32.const value") as i32,
+            ));
         }
         Opcode::I64_CONST => {
-            // Code for I64_CONST
+            stack.push(WasmValue::I64(
+                leb128::read_leb128_s(iter).expect("Failed to read i64.const value"),
+            ));
         }
         Opcode::F32_CONST => {
-            // Code for F32_CONST
+            let mut buffer = [0u8; 4];
+            iter.read_exact(&mut buffer)
+                .expect("Failed to read f32.const value");
+            stack.push(WasmValue::F32(f32::from_le_bytes(buffer)));
         }
         Opcode::F64_CONST => {
-            // Code for F64_CONST
+            let mut buffer = [0u8; 8];
+            iter.read_exact(&mut buffer)
+                .expect("Failed to read f64.const value");
+            stack.push(WasmValue::F64(f64::from_le_bytes(buffer)));
         }
         Opcode::I32_EQZ => {
             unary_fn!(stack, i32, i32, |x: i32| if x == 0 { 1 } else { 0 });
