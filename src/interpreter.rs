@@ -1,6 +1,6 @@
-use crate::{binary_fn, div_s, div_u, div_f, unary_fn};
-use crate::specs::opcodes::Opcode;
-use crate::specs::{op_impl, WasmValue};
+use crate::{binary_fn, div_s, div_u, div_f, rem_s, rem_u, unary_fn};
+use crate::specs::{op_impl, WasmValue, opcodes::Opcode};
+use crate::leb128;
 
 fn execute_opcode(opcode: Opcode, stack: &mut Vec<WasmValue>) {
     match opcode {
@@ -44,10 +44,27 @@ fn execute_opcode(opcode: Opcode, stack: &mut Vec<WasmValue>) {
             // Code for CALL_INDIRECT
         }
         Opcode::DROP => {
-            // Code for DROP
+            if stack.pop().is_none() {
+                panic!("Stack underflow from drop");
+            }
         }
         Opcode::SELECT => {
-            // Code for SELECT
+            let cond = stack.pop().expect("Stack underflow from select");
+            let val2 = stack.pop().expect("Stack underflow from select");
+            let val1 = stack.pop().expect("Stack underflow from select");
+            let cond_as_i32 = cond.to_i32().expect("Condition must be of type i32");
+
+            if matches!(
+                (&val1, &val2),
+                (WasmValue::I32(_), WasmValue::I32(_))
+                    | (WasmValue::I64(_), WasmValue::I64(_))
+                    | (WasmValue::F32(_), WasmValue::F32(_))
+                    | (WasmValue::F64(_), WasmValue::F64(_))
+            ) == false {
+                panic!("Type mismatch in select");
+            }
+
+            stack.push(if cond_as_i32 != 0 { val1 } else { val2 });
         }
         Opcode::LOCAL_GET => {
             // Code for LOCAL_GET
@@ -278,10 +295,10 @@ fn execute_opcode(opcode: Opcode, stack: &mut Vec<WasmValue>) {
             div_u!(stack, i32);
         }
         Opcode::I32_REM_S => {
-            // Code for I32_REM_S
+            rem_s!(stack, i32);
         }
         Opcode::I32_REM_U => {
-            // Code for I32_REM_U
+            rem_u!(stack, i32);
         }
         Opcode::I32_AND => {
             binary_fn!(stack, i32, i32, op_impl::i32_and);
@@ -332,10 +349,10 @@ fn execute_opcode(opcode: Opcode, stack: &mut Vec<WasmValue>) {
             div_u!(stack, i64);
         }
         Opcode::I64_REM_S => {
-            // Code for I64_REM_S
+            rem_s!(stack, i64);
         }
         Opcode::I64_REM_U => {
-            // Code for I64_REM_U
+            rem_u!(stack, i64);
         }
         Opcode::I64_AND => {
             binary_fn!(stack, i64, i64, op_impl::i64_and);

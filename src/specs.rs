@@ -30,6 +30,7 @@ macro_rules! define_name_map {
     };
 }
 
+#[allow(non_camel_case_types)]
 pub mod opcodes {
     define_name_map!(
         UNREACHABLE = 0x00 => "unreachable",
@@ -216,18 +217,23 @@ pub enum WasmValue {
 }
 
 impl WasmValue {
+    #[inline(always)]
     pub fn from_i32(value: i32) -> Self {
         WasmValue::I32(value)
     }
+    #[inline(always)]
     pub fn from_i64(value: i64) -> Self {
         WasmValue::I64(value)
     }
+    #[inline(always)]
     pub fn from_f32(value: f32) -> Self {
         WasmValue::F32(value)
     }
+    #[inline(always)]
     pub fn from_f64(value: f64) -> Self {
         WasmValue::F64(value)
     }
+    #[inline(always)]
     pub fn to_i32(&self) -> Option<i32> {
         if let WasmValue::I32(v) = *self {
             Some(v)
@@ -235,6 +241,7 @@ impl WasmValue {
             None
         }
     }
+    #[inline(always)]
     pub fn to_i64(&self) -> Option<i64> {
         if let WasmValue::I64(v) = *self {
             Some(v)
@@ -242,6 +249,7 @@ impl WasmValue {
             None
         }
     }
+    #[inline(always)]
     pub fn to_f32(&self) -> Option<f32> {
         if let WasmValue::F32(v) = *self {
             Some(v)
@@ -249,6 +257,7 @@ impl WasmValue {
             None
         }
     }
+    #[inline(always)]
     pub fn to_f64(&self) -> Option<f64> {
         if let WasmValue::F64(v) = *self {
             Some(v)
@@ -256,18 +265,22 @@ impl WasmValue {
             None
         }
     }
+    #[inline(always)]
     pub fn f32_to_i32_trunc(value: f32) -> Option<i32> {
         (value.is_finite() && value >= i32::MIN as f32 && value <= i32::MAX as f32)
             .then(|| value as i32)
     }
+    #[inline(always)]
     pub fn f32_to_i64_trunc(value: f32) -> Option<i64> {
         (value.is_finite() && value >= i64::MIN as f32 && value <= i64::MAX as f32)
             .then(|| value as i64)
     }
+    #[inline(always)]
     pub fn f64_to_i32_trunc(value: f64) -> Option<i32> {
         (value.is_finite() && value >= i32::MIN as f64 && value <= i32::MAX as f64)
             .then(|| value as i32)
     }
+    #[inline(always)]
     pub fn f64_to_i64_trunc(value: f64) -> Option<i64> {
         (value.is_finite() && value >= i64::MIN as f64 && value <= i64::MAX as f64)
             .then(|| value as i64)
@@ -300,11 +313,11 @@ pub mod op_impl {
                 let top = $stack.last_mut().expect("Stack underflow");
                 let val2 = top.[<to_ $type>]()
                     .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-    
+
                 if val1 == 0 {
                     panic!("Division by zero");
                 }
-    
+
                 *top = WasmValue::[<$type:upper>](val2.wrapping_div(val1));
             }
         }};
@@ -319,12 +332,50 @@ pub mod op_impl {
                 let top = $stack.last_mut().expect("Stack underflow");
                 let val2 = top.[<to_ $type>]()
                     .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-    
+
                 if val1 == 0 {
                     panic!("Division by zero");
                 }
-                
+
                 *top = WasmValue::[<$type:upper>]((val2 as u64).wrapping_div(val1 as u64) as $type);
+            }
+        }};
+    }
+
+    #[macro_export]
+    macro_rules! rem_s {
+        ($stack:expr, $type:ident) => {{
+            paste::paste! {
+                let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
+                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+                let top = $stack.last_mut().expect("Stack underflow");
+                let val2 = top.[<to_ $type>]()
+                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+
+                if val1 == 0 {
+                    panic!("Division by zero");
+                }
+
+                *top = WasmValue::[<$type:upper>](val2.wrapping_rem(val1));
+            }
+        }};
+    }
+
+    #[macro_export]
+    macro_rules! rem_u {
+        ($stack:expr, $type:ident) => {{
+            paste::paste! {
+                let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
+                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+                let top = $stack.last_mut().expect("Stack underflow");
+                let val2 = top.[<to_ $type>]()
+                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+
+                if val1 == 0 {
+                    panic!("Division by zero");
+                }
+
+                *top = WasmValue::[<$type:upper>]((val2 as u64).wrapping_rem(val1 as u64) as $type);
             }
         }};
     }
@@ -338,15 +389,12 @@ pub mod op_impl {
                 let top = $stack.last_mut().expect("Stack underflow");
                 let val2 = top.[<to_ $type>]()
                     .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-    
-                // Perform floating-point division
-                let result = val2 / val1;
-    
-                *top = WasmValue::[<$type:upper>](result);
+                
+                *top = WasmValue::[<$type:upper>](val2 / val1);
             }
         }};
     }
-    
+
     #[macro_export]
     macro_rules! unary_fn {
         ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {{
