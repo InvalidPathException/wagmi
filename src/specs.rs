@@ -289,11 +289,64 @@ pub mod op_impl {
                 *top = WasmValue::[<$out_type:upper>]($func(val2, val1));
             }
         }};
-        ($stack:expr, $in_type:ident, $out_type:ident, $op:tt) => {
-            binary_fn!($stack, $in_type, $out_type, |a, b| a $op b);
-        };
     }
 
+    #[macro_export]
+    macro_rules! div_s {
+    ($stack:expr, $type:ident) => {{
+            paste::paste! {
+                let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
+                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+                let top = $stack.last_mut().expect("Stack underflow");
+                let val2 = top.[<to_ $type>]()
+                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+    
+                if val1 == 0 {
+                    panic!("Division by zero");
+                }
+    
+                *top = WasmValue::[<$type:upper>](val2.wrapping_div(val1));
+            }
+        }};
+    }
+
+    #[macro_export]
+    macro_rules! div_u {
+    ($stack:expr, $type:ident) => {{
+            paste::paste! {
+                let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
+                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+                let top = $stack.last_mut().expect("Stack underflow");
+                let val2 = top.[<to_ $type>]()
+                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+    
+                if val1 == 0 {
+                    panic!("Division by zero");
+                }
+                
+                *top = WasmValue::[<$type:upper>]((val2 as u64).wrapping_div(val1 as u64) as $type);
+            }
+        }};
+    }
+
+    #[macro_export]
+    macro_rules! div_f {
+        ($stack:expr, $type:ident) => {{
+            paste::paste! {
+                let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
+                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+                let top = $stack.last_mut().expect("Stack underflow");
+                let val2 = top.[<to_ $type>]()
+                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+    
+                // Perform floating-point division
+                let result = val2 / val1;
+    
+                *top = WasmValue::[<$type:upper>](result);
+            }
+        }};
+    }
+    
     #[macro_export]
     macro_rules! unary_fn {
         ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {{
@@ -384,8 +437,94 @@ pub mod op_impl {
         };
     }
 
+    macro_rules! define_ibinop {
+        ($name:literal, $type:ty) => {
+            paste! {
+                #[inline(always)]
+                pub fn [<$name _add>](a: $type, b: $type) -> $type {
+                    a.wrapping_add(b)
+                }
+                #[inline(always)]
+                pub fn [<$name _sub>](a: $type, b: $type) -> $type {
+                    a.wrapping_sub(b)
+                }
+                #[inline(always)]
+                pub fn [<$name _mul>](a: $type, b: $type) -> $type {
+                    a.wrapping_mul(b)
+                }
+                #[inline(always)]
+                pub fn [<$name _and>](a: $type, b: $type) -> $type {
+                    a & b
+                }
+                #[inline(always)]
+                pub fn [<$name _or>](a: $type, b: $type) -> $type {
+                    a | b
+                }
+                #[inline(always)]
+                pub fn [<$name _xor>](a: $type, b: $type) -> $type {
+                    a ^ b
+                }
+                #[inline(always)]
+                pub fn [<$name _shl>](a: $type, b: $type) -> $type {
+                    a.wrapping_shl(b as u32)
+                }
+                #[inline(always)]
+                pub fn [<$name _shr_s>](a: $type, b: $type) -> $type {
+                    a >> (b as u32)
+                }
+                #[inline(always)]
+                pub fn [<$name _shr_u>](a: $type, b: $type) -> $type {
+                    a.wrapping_shr(b as u32)
+                }
+                #[inline(always)]
+                pub fn [<$name _rotl>](a: $type, b: $type) -> $type {
+                    a.rotate_left(b as u32)
+                }
+                #[inline(always)]
+                pub fn [<$name _rotr>](a: $type, b: $type) -> $type {
+                    a.rotate_right(b as u32)
+                }
+            }
+        };
+    }
+
+    macro_rules! define_fbinop {
+        ($name:literal, $type:ty) => {
+            paste! {
+                #[inline(always)]
+                pub fn [<$name _add>](a: $type, b: $type) -> $type {
+                    a + b
+                }
+                #[inline(always)]
+                pub fn [<$name _sub>](a: $type, b: $type) -> $type {
+                    a - b
+                }
+                #[inline(always)]
+                pub fn [<$name _mul>](a: $type, b: $type) -> $type {
+                    a * b
+                }
+                #[inline(always)]
+                pub fn [<$name _min>](a: $type, b: $type) -> $type {
+                    a.min(b)
+                }
+                #[inline(always)]
+                pub fn [<$name _max>](a: $type, b: $type) -> $type {
+                    a.max(b)
+                }
+                #[inline(always)]
+                pub fn [<$name _copysign>](a: $type, b: $type) -> $type {
+                    a.copysign(b)
+                }
+            }
+        };
+    }
+
     define_irelop!("i32", i32, u32);
     define_irelop!("i64", i64, u64);
     define_frelop!("f32", f32);
     define_frelop!("f64", f64);
+    define_ibinop!("i32", i32);
+    define_ibinop!("i64", i64);
+    define_fbinop!("f32", f32);
+    define_fbinop!("f64", f64);
 }

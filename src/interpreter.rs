@@ -1,4 +1,4 @@
-use crate::{binary_fn, unary_fn};
+use crate::{binary_fn, div_s, div_u, div_f, unary_fn};
 use crate::specs::opcodes::Opcode;
 use crate::specs::{op_impl, WasmValue};
 
@@ -254,28 +254,28 @@ fn execute_opcode(opcode: Opcode, stack: &mut Vec<WasmValue>) {
             binary_fn!(stack, f64, i32, op_impl::f64_ge);
         }
         Opcode::I32_CLZ => {
-            // Code for I32_CLZ
+            unary_fn!(stack, i32, i32, |x: i32| x.leading_zeros() as i32);
         }
         Opcode::I32_CTZ => {
-            // Code for I32_CTZ
+            unary_fn!(stack, i32, i32, |x: i32| x.trailing_zeros() as i32);
         }
         Opcode::I32_POPCNT => {
-            // Code for I32_POPCNT
+            unary_fn!(stack, i32, i32, |x: i32| x.count_ones() as i32);
         }
         Opcode::I32_ADD => {
-            // Code for I32_ADD
+            binary_fn!(stack, i32, i32, op_impl::i32_add);
         }
         Opcode::I32_SUB => {
-            binary_fn!(stack, i32, i32, +);
+            binary_fn!(stack, i32, i32, op_impl::i32_sub);
         }
         Opcode::I32_MUL => {
-            // Code for I32_MUL
+            binary_fn!(stack, i32, i32, op_impl::i32_mul);
         }
         Opcode::I32_DIV_S => {
-            // Code for I32_DIV_S
+            div_s!(stack, i32);
         }
         Opcode::I32_DIV_U => {
-            // Code for I32_DIV_U
+            div_u!(stack, i32);
         }
         Opcode::I32_REM_S => {
             // Code for I32_REM_S
@@ -284,52 +284,52 @@ fn execute_opcode(opcode: Opcode, stack: &mut Vec<WasmValue>) {
             // Code for I32_REM_U
         }
         Opcode::I32_AND => {
-            // Code for I32_AND
+            binary_fn!(stack, i32, i32, op_impl::i32_and);
         }
         Opcode::I32_OR => {
-            // Code for I32_OR
+            binary_fn!(stack, i32, i32, op_impl::i32_or);
         }
         Opcode::I32_XOR => {
-            // Code for I32_XOR
+            binary_fn!(stack, i32, i32, op_impl::i32_xor);
         }
         Opcode::I32_SHL => {
-            // Code for I32_SHL
+            binary_fn!(stack, i32, i32, op_impl::i32_shl);
         }
         Opcode::I32_SHR_S => {
-            // Code for I32_SHR_S
+            binary_fn!(stack, i32, i32, op_impl::i32_shr_s);
         }
         Opcode::I32_SHR_U => {
-            // Code for I32_SHR_U
+            binary_fn!(stack, i32, i32, op_impl::i32_shr_u);
         }
         Opcode::I32_ROTL => {
-            // Code for I32_ROTL
+            binary_fn!(stack, i32, i32, op_impl::i32_rotl);
         }
         Opcode::I32_ROTR => {
-            // Code for I32_ROTR
+            binary_fn!(stack, i32, i32, op_impl::i32_rotr);
         }
         Opcode::I64_CLZ => {
-            // Code for I64_CLZ
+            unary_fn!(stack, i64, i64, |x: i64| x.leading_zeros() as i64);
         }
         Opcode::I64_CTZ => {
-            // Code for I64_CTZ
+            unary_fn!(stack, i64, i64, |x: i64| x.trailing_zeros() as i64);
         }
         Opcode::I64_POPCNT => {
-            // Code for I64_POPCNT
+            unary_fn!(stack, i64, i64, |x: i64| x.count_ones() as i64);
         }
         Opcode::I64_ADD => {
-            // Code for I64_ADD
+            binary_fn!(stack, i64, i64, op_impl::i64_add);
         }
         Opcode::I64_SUB => {
-            // Code for I64_SUB
+            binary_fn!(stack, i64, i64, op_impl::i64_sub);
         }
         Opcode::I64_MUL => {
-            // Code for I64_MUL
+            binary_fn!(stack, i64, i64, op_impl::i64_mul);
         }
         Opcode::I64_DIV_S => {
-            // Code for I64_DIV_S
+            div_s!(stack, i64);
         }
         Opcode::I64_DIV_U => {
-            // Code for I64_DIV_U
+            div_u!(stack, i64);
         }
         Opcode::I64_REM_S => {
             // Code for I64_REM_S
@@ -338,112 +338,112 @@ fn execute_opcode(opcode: Opcode, stack: &mut Vec<WasmValue>) {
             // Code for I64_REM_U
         }
         Opcode::I64_AND => {
-            // Code for I64_AND
+            binary_fn!(stack, i64, i64, op_impl::i64_and);
         }
         Opcode::I64_OR => {
-            // Code for I64_OR
+            binary_fn!(stack, i64, i64, op_impl::i64_or);
         }
         Opcode::I64_XOR => {
-            // Code for I64_XOR
+            binary_fn!(stack, i64, i64, op_impl::i64_xor);
         }
         Opcode::I64_SHL => {
-            // Code for I64_SHL
+            binary_fn!(stack, i64, i64, op_impl::i64_shl);
         }
         Opcode::I64_SHR_S => {
-            // Code for I64_SHR_S
+            binary_fn!(stack, i64, i64, op_impl::i64_shr_s);
         }
         Opcode::I64_SHR_U => {
-            // Code for I64_SHR_U
+            binary_fn!(stack, i64, i64, op_impl::i64_shr_u);
         }
         Opcode::I64_ROTL => {
-            // Code for I64_ROTL
+            binary_fn!(stack, i64, i64, op_impl::i64_rotl);
         }
         Opcode::I64_ROTR => {
-            // Code for I64_ROTR
+            binary_fn!(stack, i64, i64, op_impl::i64_rotr);
         }
         Opcode::F32_ABS => {
-            // Code for F32_ABS
+            unary_fn!(stack, f32, f32, |x: f32| x.abs());
         }
         Opcode::F32_NEG => {
-            // Code for F32_NEG
+            unary_fn!(stack, f32, f32, |x: f32| -x);
         }
         Opcode::F32_CEIL => {
-            // Code for F32_CEIL
+            unary_fn!(stack, f32, f32, |x: f32| x.ceil());
         }
         Opcode::F32_FLOOR => {
-            // Code for F32_FLOOR
+            unary_fn!(stack, f32, f32, |x: f32| x.floor());
         }
         Opcode::F32_TRUNC => {
             // Code for F32_TRUNC
         }
         Opcode::F32_NEAREST => {
-            // Code for F32_NEAREST
+            unary_fn!(stack, f32, f32, |x: f32| x.round());
         }
         Opcode::F32_SQRT => {
-            // Code for F32_SQRT
+            unary_fn!(stack, f32, f32, |x: f32| x.sqrt());
         }
         Opcode::F32_ADD => {
-            // Code for F32_ADD
+            binary_fn!(stack, f32, f32, op_impl::f32_add);
         }
         Opcode::F32_SUB => {
-            // Code for F32_SUB
+            binary_fn!(stack, f32, f32, op_impl::f32_sub);
         }
         Opcode::F32_MUL => {
-            // Code for F32_MUL
+            binary_fn!(stack, f32, f32, op_impl::f32_mul);
         }
         Opcode::F32_DIV => {
-            // Code for F32_DIV
+            div_f!(stack, f32);
         }
         Opcode::F32_MIN => {
-            // Code for F32_MIN
+            binary_fn!(stack, f32, f32, op_impl::f32_min);
         }
         Opcode::F32_MAX => {
-            // Code for F32_MAX
+            binary_fn!(stack, f32, f32, op_impl::f32_max);
         }
         Opcode::F32_COPYSIGN => {
-            // Code for F32_COPYSIGN
+            binary_fn!(stack, f32, f32, op_impl::f32_copysign);
         }
         Opcode::F64_ABS => {
-            // Code for F64_ABS
+            unary_fn!(stack, f64, f64, |x: f64| x.abs());
         }
         Opcode::F64_NEG => {
-            // Code for F64_NEG
+            unary_fn!(stack, f64, f64, |x: f64| -x);
         }
         Opcode::F64_CEIL => {
-            // Code for F64_CEIL
+            unary_fn!(stack, f64, f64, |x: f64| x.ceil());
         }
         Opcode::F64_FLOOR => {
-            // Code for F64_FLOOR
+            unary_fn!(stack, f64, f64, |x: f64| x.floor());
         }
         Opcode::F64_TRUNC => {
             // Code for F64_TRUNC
         }
         Opcode::F64_NEAREST => {
-            // Code for F64_NEAREST
+            unary_fn!(stack, f64, f64, |x: f64| x.round());
         }
         Opcode::F64_SQRT => {
-            // Code for F64_SQRT
+            unary_fn!(stack, f64, f64, |x: f64| x.sqrt());
         }
         Opcode::F64_ADD => {
-            // Code for F64_ADD
+            binary_fn!(stack, f64, f64, op_impl::f64_add);
         }
         Opcode::F64_SUB => {
-            // Code for F64_SUB
+            binary_fn!(stack, f64, f64, op_impl::f64_sub);
         }
         Opcode::F64_MUL => {
-            // Code for F64_MUL
+            binary_fn!(stack, f64, f64, op_impl::f64_mul);
         }
         Opcode::F64_DIV => {
-            // Code for F64_DIV
+            div_f!(stack, f64);
         }
         Opcode::F64_MIN => {
-            // Code for F64_MIN
+            binary_fn!(stack, f64, f64, op_impl::f64_min);
         }
         Opcode::F64_MAX => {
-            // Code for F64_MAX
+            binary_fn!(stack, f64, f64, op_impl::f64_max);
         }
         Opcode::F64_COPYSIGN => {
-            // Code for F64_COPYSIGN
+            binary_fn!(stack, f64, f64, op_impl::f64_copysign);
         }
         Opcode::I32_WRAP_I64 => {
             unary_fn!(stack, i64, i32, |x: i64| x as i32);
