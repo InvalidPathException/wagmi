@@ -1,25 +1,36 @@
+use std::fmt::Debug;
+
 macro_rules! define_name_map {
     ($( $name:ident = $value:expr => $string:expr ),* $(,)?) => {
         pub mod constants {
             $(pub const $name: u8 = $value;)*
         }
 
-        pub const fn create_name_array() -> [Option<&'static str>; 256] {
-            let mut arr = [None; 256];
-            $(arr[$value as usize] = Some($string);)*
-            arr
+        #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+        pub enum Opcode {
+            $($name = $value),*
         }
 
-        pub const OPCODE_NAMES: [Option<&'static str>; 256] = create_name_array();
+        impl Opcode {
+            #[inline]
+            pub fn from_byte(byte: u8) -> Option<Self> {
+                match byte {
+                    $($value => Some(Self::$name),)*
+                    _ => None,
+                }
+            }
 
-        #[inline]
-        pub fn get_name(opcode: u8) -> Option<&'static str> {
-            OPCODE_NAMES[opcode as usize]
+            #[inline]
+            pub fn as_str(&self) -> &'static str {
+                match self {
+                    $(Self::$name => $string,)*
+                }
+            }
         }
     };
 }
 
-mod opcodes {
+pub mod opcodes {
     define_name_map!(
         UNREACHABLE = 0x00 => "unreachable",
         NOP = 0x01 => "nop",
@@ -205,136 +216,176 @@ pub enum WasmValue {
 }
 
 impl WasmValue {
-    pub fn from_i32(value: i32) -> Self { WasmValue::I32(value) }
-    pub fn from_i64(value: i64) -> Self { WasmValue::I64(value) }
-    pub fn from_f32(value: f32) -> Self { WasmValue::F32(value) }
-    pub fn from_f64(value: f64) -> Self { WasmValue::F64(value) }
-    pub fn to_i32(&self) -> Option<i32> { if let WasmValue::I32(v) = *self { Some(v) } else { None } }
-    pub fn to_i64(&self) -> Option<i64> { if let WasmValue::I64(v) = *self { Some(v) } else { None } }
-    pub fn to_f32(&self) -> Option<f32> { if let WasmValue::F32(v) = *self { Some(v) } else { None } }
-    pub fn to_f64(&self) -> Option<f64> { if let WasmValue::F64(v) = *self { Some(v) } else { None } }
+    pub fn from_i32(value: i32) -> Self {
+        WasmValue::I32(value)
+    }
+    pub fn from_i64(value: i64) -> Self {
+        WasmValue::I64(value)
+    }
+    pub fn from_f32(value: f32) -> Self {
+        WasmValue::F32(value)
+    }
+    pub fn from_f64(value: f64) -> Self {
+        WasmValue::F64(value)
+    }
+    pub fn to_i32(&self) -> Option<i32> {
+        if let WasmValue::I32(v) = *self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+    pub fn to_i64(&self) -> Option<i64> {
+        if let WasmValue::I64(v) = *self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+    pub fn to_f32(&self) -> Option<f32> {
+        if let WasmValue::F32(v) = *self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+    pub fn to_f64(&self) -> Option<f64> {
+        if let WasmValue::F64(v) = *self {
+            Some(v)
+        } else {
+            None
+        }
+    }
     pub fn f32_to_i32_trunc(value: f32) -> Option<i32> {
-        (value.is_finite() && value >= i32::MIN as f32 && value <= i32::MAX as f32).then(|| value as i32)
+        (value.is_finite() && value >= i32::MIN as f32 && value <= i32::MAX as f32)
+            .then(|| value as i32)
     }
     pub fn f32_to_i64_trunc(value: f32) -> Option<i64> {
-        (value.is_finite() && value >= i64::MIN as f32 && value <= i64::MAX as f32).then(|| value as i64)
+        (value.is_finite() && value >= i64::MIN as f32 && value <= i64::MAX as f32)
+            .then(|| value as i64)
     }
     pub fn f64_to_i32_trunc(value: f64) -> Option<i32> {
-        (value.is_finite() && value >= i32::MIN as f64 && value <= i32::MAX as f64).then(|| value as i32)
+        (value.is_finite() && value >= i32::MIN as f64 && value <= i32::MAX as f64)
+            .then(|| value as i32)
     }
     pub fn f64_to_i64_trunc(value: f64) -> Option<i64> {
-        (value.is_finite() && value >= i64::MIN as f64 && value <= i64::MAX as f64).then(|| value as i64)
+        (value.is_finite() && value >= i64::MIN as f64 && value <= i64::MAX as f64)
+            .then(|| value as i64)
     }
-    pub fn i32_to_f32(value: i32) -> f32 { value as f32 }
-    pub fn i32_to_f64(value: i32) -> f64 { value as f64 }
-    pub fn i64_to_f32(value: i64) -> f32 { value as f32 }
-    pub fn i64_to_f64(value: i64) -> f64 { value as f64 }
-    pub fn f32_to_f64(value: f32) -> f64 { value as f64 }
-    pub fn f64_to_f32(value: f64) -> f32 { value as f32 }
-    pub fn i32_to_f32_reinterpret(value: i32) -> f32 { f32::from_bits(value as u32) }
-    pub fn f32_to_i32_reinterpret(value: f32) -> i32 { value.to_bits() as i32 }
-    pub fn i64_to_f64_reinterpret(value: i64) -> f64 { f64::from_bits(value as u64) }
-    pub fn f64_to_i64_reinterpret(value: f64) -> i64 { value.to_bits() as i64 }
 }
 
-#[macro_export]
-macro_rules! binary_op {
-    ($stack:expr, I32, $op:tt) => {{
-        let arg1 = $stack.pop().expect("Stack underflow");
-        let arg2 = $stack.pop().expect("Stack underflow");
-        let val1 = arg1.to_i32().expect("Wrong type (expected i32)");
-        let val2 = arg2.to_i32().expect("Wrong type (expected i32)");
-        let result = val2 $op val1;
-        $stack.push(WasmValue::I32(result));
-    }};
-    ($stack:expr, I64, $op:tt) => {{
-        let arg1 = $stack.pop().expect("Stack underflow");
-        let arg2 = $stack.pop().expect("Stack underflow");
-        let val1 = arg1.to_i64().expect("Wrong type (expected i64)");
-        let val2 = arg2.to_i64().expect("Wrong type (expected i64)");
-        let result = val2 $op val1;
-        $stack.push(WasmValue::I64(result));
-    }};
-    ($stack:expr, F32, $op:tt) => {{
-        let arg1 = $stack.pop().expect("Stack underflow");
-        let arg2 = $stack.pop().expect("Stack underflow");
-        let val1 = arg1.to_f32().expect("Wrong type (expected f32)");
-        let val2 = arg2.to_f32().expect("Wrong type (expected f32)");
-        let result = val2 $op val1;
-        $stack.push(WasmValue::F32(result));
-    }};
-    ($stack:expr, F64, $op:tt) => {{
-        let arg1 = $stack.pop().expect("Stack underflow");
-        let arg2 = $stack.pop().expect("Stack underflow");
-        let val1 = arg1.to_f64().expect("Wrong type (expected f64)");
-        let val2 = arg2.to_f64().expect("Wrong type (expected f64)");
-        let result = val2 $op val1;
-        $stack.push(WasmValue::F64(result));
-    }};
+pub mod op_impl {
+    use paste::paste;
+
+    #[macro_export]
+    macro_rules! binary_fn {
+        ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {{
+            paste::paste! {
+                let val1 = $stack.pop().expect("Stack underflow").[<to_ $in_type>]()
+                    .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
+                let top = $stack.last_mut().expect("Stack underflow");
+                let val2 = top.[<to_ $in_type>]()
+                    .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
+                *top = WasmValue::[<$out_type:upper>]($func(val2, val1));
+            }
+        }};
+        ($stack:expr, $in_type:ident, $out_type:ident, $op:tt) => {
+            binary_fn!($stack, $in_type, $out_type, |a, b| a $op b);
+        };
+    }
+
+    #[macro_export]
+    macro_rules! unary_fn {
+        ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {{
+            paste::paste! {
+                let top = $stack.last_mut().expect("Stack underflow");
+                let val = top.[<to_ $in_type>]()
+                    .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
+                *top = WasmValue::[<$out_type:upper>]($func(val));
+            }
+        }};
+    }
+
+    macro_rules! define_irelop {
+        ($name:literal, $signed_type:ty, $unsigned_type:ty) => {
+            paste! {
+                #[inline(always)]
+                pub fn [<$name _eq>](a: $signed_type, b: $signed_type) -> i32 {
+                    if a ^ b == 0 { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _ne>](a: $signed_type, b: $signed_type) -> i32 {
+                    if a ^ b != 0 { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _lt_u>](a: $signed_type, b: $signed_type) -> i32 {
+                    if (a as $unsigned_type) < (b as $unsigned_type) { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _gt_u>](a: $signed_type, b: $signed_type) -> i32 {
+                    if (a as $unsigned_type) > (b as $unsigned_type) { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _le_u>](a: $signed_type, b: $signed_type) -> i32 {
+                    if (a as $unsigned_type) <= (b as $unsigned_type) { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _ge_u>](a: $signed_type, b: $signed_type) -> i32 {
+                    if (a as $unsigned_type) >= (b as $unsigned_type) { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _lt_s>](a: $signed_type, b: $signed_type) -> i32 {
+                    if a < b { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _gt_s>](a: $signed_type, b: $signed_type) -> i32 {
+                    if a > b { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _le_s>](a: $signed_type, b: $signed_type) -> i32 {
+                    if a <= b { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _ge_s>](a: $signed_type, b: $signed_type) -> i32 {
+                    if a >= b { 1 } else { 0 }
+                }
+            }
+        };
+    }
+
+    macro_rules! define_frelop {
+        ($name:literal, $float_type:ty) => {
+            paste! {
+                #[inline(always)]
+                pub fn [<$name _eq>](a: $float_type, b: $float_type) -> i32 {
+                    if a == b { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _ne>](a: $float_type, b: $float_type) -> i32 {
+                    if a != b { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _lt>](a: $float_type, b: $float_type) -> i32 {
+                    if a < b { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _gt>](a: $float_type, b: $float_type) -> i32 {
+                    if a > b { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _le>](a: $float_type, b: $float_type) -> i32 {
+                    if a <= b { 1 } else { 0 }
+                }
+                #[inline(always)]
+                pub fn [<$name _ge>](a: $float_type, b: $float_type) -> i32 {
+                    if a >= b { 1 } else { 0 }
+                }
+            }
+        };
+    }
+
+    define_irelop!("i32", i32, u32);
+    define_irelop!("i64", i64, u64);
+    define_frelop!("f32", f32);
+    define_frelop!("f64", f64);
 }
-
-#[macro_export]
-macro_rules! binary_cmp {
-    ($stack:expr, I32, $op:tt) => {{
-        let arg1 = $stack.pop().expect("Stack underflow");
-        let arg2 = $stack.pop().expect("Stack underflow");
-        let val1 = arg1.to_i32().expect("Wrong type (expected i32)");
-        let val2 = arg2.to_i32().expect("Wrong type (expected i32)");
-        let result = if val2 $op val1 { 1 } else { 0 };
-        $stack.push(WasmValue::I32(result));
-    }};
-    ($stack:expr, I64, $op:tt) => {{
-        let arg1 = $stack.pop().expect("Stack underflow");
-        let arg2 = $stack.pop().expect("Stack underflow");
-        let val1 = arg1.to_i64().expect("Wrong type (expected i64)");
-        let val2 = arg2.to_i64().expect("Wrong type (expected i64)");
-        let result = if val2 $op val1 { 1 } else { 0 };
-        $stack.push(WasmValue::I32(result));
-    }};
-    ($stack:expr, F32, $op:tt) => {{
-        let arg1 = $stack.pop().expect("Stack underflow");
-        let arg2 = $stack.pop().expect("Stack underflow");
-        let val1 = arg1.to_f32().expect("Wrong type (expected f32)");
-        let val2 = arg2.to_f32().expect("Wrong type (expected f32)");
-        let result = if val2 $op val1 { 1 } else { 0 };
-        $stack.push(WasmValue::I32(result));
-    }};
-    ($stack:expr, F64, $op:tt) => {{
-        let arg1 = $stack.pop().expect("Stack underflow");
-        let arg2 = $stack.pop().expect("Stack underflow");
-        let val1 = arg1.to_f64().expect("Wrong type (expected f64)");
-        let val2 = arg2.to_f64().expect("Wrong type (expected f64)");
-        let result = if val2 $op val1 { 1 } else { 0 };
-        $stack.push(WasmValue::I32(result));
-    }};
-}
-
-#[macro_export]
-macro_rules! unary_fn {
-    ($stack:expr, I32, $fn:path) => {{
-        let arg = $stack.pop().expect("Stack underflow");
-        let val = arg.to_i32().expect("Wrong type (expected i32)");
-        let result = $fn(val);
-        $stack.push(WasmValue::I32(result));
-    }};
-    ($stack:expr, I64, $fn:path) => {{
-        let arg = $stack.pop().expect("Stack underflow");
-        let val = arg.to_i64().expect("Wrong type (expected i64)");
-        let result = $fn(val);
-        $stack.push(WasmValue::I64(result));
-    }};
-    ($stack:expr, F32, $fn:path) => {{
-        let arg = $stack.pop().expect("Stack underflow");
-        let val = arg.to_f32().expect("Wrong type (expected f32)");
-        let result = $fn(val);
-        $stack.push(WasmValue::F32(result));
-    }};
-    ($stack:expr, F64, $fn:path) => {{
-        let arg = $stack.pop().expect("Stack underflow");
-        let val = arg.to_f64().expect("Wrong type (expected f64)");
-        let result = $fn(val);
-        $stack.push(WasmValue::F64(result));
-    }};
-}
-
-
