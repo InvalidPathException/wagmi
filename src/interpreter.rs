@@ -1,6 +1,6 @@
 use crate::leb128::leb128;
 use crate::specs::{op_impl, opcodes::Opcode, WasmValue};
-use crate::{binary_fn, div_f, div_s, div_u, memory_load, rem_s, rem_u, unary_fn};
+use crate::{binary_fn, div_f, div_s, div_u, memory_load, memory_store, rem_s, rem_u, unary_fn};
 use std::io::Read;
 
 fn execute_opcode(
@@ -89,73 +89,96 @@ fn execute_opcode(
             // Code for GLOBAL_SET
         }
         Opcode::I32_LOAD => {
-            memory_load!(stack, memory, I32, leb128::i32_load)
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, I32, leb128::i32_load, offset);}
         }
         Opcode::I64_LOAD => {
-            memory_load!(stack, memory, I64, leb128::i64_load)
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, I64, leb128::i64_load, offset);}
         }
         Opcode::F32_LOAD => {
-            memory_load!(stack, memory, F32, leb128::f32_load)
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, F32, leb128::f32_load, offset);}
         }
         Opcode::F64_LOAD => {
-            memory_load!(stack, memory, F64, leb128::f64_load)
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, F64, leb128::f64_load, offset);}
         }
         Opcode::I32_LOAD8_S => {
-            memory_load!(stack, memory, I32, leb128::i32_load8_s)
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, I32, leb128::i32_load8_s, offset);}
         }
         Opcode::I32_LOAD8_U => {
-            memory_load!(stack, memory, I32, leb128::i32_load8_u)
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, I32, leb128::i32_load8_u, offset);}
         }
         Opcode::I32_LOAD16_S => {
-            memory_load!(stack, memory, I32, leb128::i32_load16_s)
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, I32, leb128::i32_load16_s, offset);}
         }
         Opcode::I32_LOAD16_U => {
-            memory_load!(stack, memory, I32, leb128::i32_load16_u)
-        }
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, I32, leb128::i32_load16_u, offset);}
+        }        
         Opcode::I64_LOAD8_S => {
-            memory_load!(stack, memory, I64, leb128::i64_load8_s)
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, I64, leb128::i64_load8_s, offset);}
         }
         Opcode::I64_LOAD8_U => {
-            memory_load!(stack, memory, I64, leb128::i64_load8_u)
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, I64, leb128::i64_load8_u, offset);}
         }
         Opcode::I64_LOAD16_S => {
-            memory_load!(stack, memory, I64, leb128::i64_load16_s)
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, I64, leb128::i64_load16_s, offset);}
         }
         Opcode::I64_LOAD16_U => {
-            memory_load!(stack, memory, I64, leb128::i64_load16_u)
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, I64, leb128::i64_load16_u, offset);}
         }
         Opcode::I64_LOAD32_S => {
-            memory_load!(stack, memory, I64, leb128::i64_load32_s)
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, I64, leb128::i64_load32_s, offset);}
         }
         Opcode::I64_LOAD32_U => {
-            memory_load!(stack, memory, I64, leb128::i64_load32_u)
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_load!(stack, memory, I64, leb128::i64_load32_u, offset);}
         }
         Opcode::I32_STORE => {
-            // Code for I32_STORE
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_store!(stack, &mut memory[..], I32, leb128::i32_store, offset);}
         }
         Opcode::I64_STORE => {
-            // Code for I64_STORE
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_store!(stack, &mut memory[..], I64, leb128::i64_store, offset);}
         }
         Opcode::F32_STORE => {
-            // Code for F32_STORE
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_store!(stack, &mut memory[..], F32, leb128::f32_store, offset);}
         }
         Opcode::F64_STORE => {
-            // Code for F64_STORE
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_store!(stack, &mut memory[..], F64, leb128::f64_store, offset);}
         }
         Opcode::I32_STORE8 => {
-            // Code for I32_STORE8
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_store!(stack, &mut memory[..], I32, leb128::i32_store8, offset);}
         }
         Opcode::I32_STORE16 => {
-            // Code for I32_STORE16
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_store!(stack, &mut memory[..], I32, leb128::i32_store16, offset);}
         }
         Opcode::I64_STORE8 => {
-            // Code for I64_STORE8
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_store!(stack, &mut memory[..], I64, leb128::i64_store8, offset);}
         }
         Opcode::I64_STORE16 => {
-            // Code for I64_STORE16
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_store!(stack, &mut memory[..], I64, leb128::i64_store16, offset);}
         }
         Opcode::I64_STORE32 => {
-            // Code for I64_STORE32
+            let (align, offset) = leb128::read_memarg(iter);
+            {memory_store!(stack, &mut memory[..], I64, leb128::i64_store32, offset);}
         }
         Opcode::MEMORY_SIZE => {
             stack.push(WasmValue::I32(memory.len() as i32));

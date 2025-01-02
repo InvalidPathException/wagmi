@@ -2,6 +2,7 @@ pub mod leb128 {
     use paste::paste;
     use std::error::Error;
     use std::fmt;
+    use std::io::Read;
 
     #[derive(Debug)]
     pub struct LEB128Error(String);
@@ -60,98 +61,181 @@ pub mod leb128 {
 
         Err(LEB128Error("Premature end of input".to_string()))
     }
+    
+    #[derive(Debug)]
+    pub struct WasmMemoryError(String);
+
+    impl fmt::Display for WasmMemoryError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+
+    impl Error for WasmMemoryError {}
 
     #[macro_export]
     macro_rules! memory_load {
-        ($stack:expr, $memory:expr, $type:ident, $leb_fn:expr) => {{
-            let addr = $stack
+        ($stack:expr, $memory:expr, $wasm_ty:ident, $load_fn:expr, $offset:expr) => {{
+            let base_addr = $stack
                 .pop()
-                .expect("Stack underflow")
+                .expect("Stack underflow when popping load address")
                 .to_i32()
-                .expect("Expected i32 memory index") as usize;
+                .expect("Expected i32 memory address") as usize;
 
-            let mut memory_slice = $memory.get(addr..).expect("Memory access out of bounds");
+            let effective_addr = base_addr + $offset as usize;
 
-            let value = $leb_fn(&mut memory_slice).expect("Failed to decode value");
+            let value = $load_fn(&$memory, effective_addr)
+                .expect("Failed to load from memory");
 
-            $stack.push(WasmValue::$type(value));
+            $stack.push(WasmValue::$wasm_ty(value));
         }};
     }
 
-    macro_rules! define_load_int {
-        ($name:literal, $type:ty, $leb_fn:ident) => {
-            paste::paste! {
+    #[macro_export]
+    macro_rules! memory_store {
+        ($stack:expr, $memory:expr, $wasm_ty:ident, $store_fn:expr, $offset:expr) => {{
+            let raw_value = $stack
+                .pop()
+                .expect("Stack underflow when popping store value");
+
+            let base_addr = $stack
+                .pop()
+                .expect("Stack underflow when popping store address")
+                .to_i32()
+                .expect("Expected i32 memory address") as usize;
+
+            let effective_addr = base_addr + $offset as usize;
+
+            let typed_value = match raw_value {
+                WasmValue::$wasm_ty(v) => v,
+                _ => panic!(
+                    "Expected a {} for store, got {:?}",
+                    stringify!($wasm_ty),
+                    raw_value
+                ),
+            };
+
+            $store_fn(&mut $memory, effective_addr, typed_value)
+                .expect("Failed to store in memory");
+        }};
+    }
+
+
+    macro_rules! define_load_fn {
+        ($name:ident, $type:ty, $num_bytes:expr) => {
+            paste! {
                 #[inline(always)]
                 pub fn [<$name _load>](
-                    slice: &mut &[u8],
-                ) -> Result<$type, LEB128Error> {
-                    $leb_fn(slice).and_then(|result| {
-                        <$type>::try_from(result).map_err(|_| {
-                            LEB128Error("Result is not target type".to_string())
-                        })
-                    })
-                }
-                #[inline(always)]
-                pub fn [<$name _load8_s>](
-                    slice: &mut &[u8],
-                ) -> Result<$type, LEB128Error> {
-                    let value: i8 = $leb_fn(slice)? as i8;
-                    Ok(value as $type)
-                }
-                #[inline(always)]
-                pub fn [<$name _load8_u>](
-                    slice: &mut &[u8],
-                ) -> Result<$type, LEB128Error> {
-                    let value: u8 = $leb_fn(slice)? as u8;
-                    Ok(value as $type)
-                }
-                #[inline(always)]
-                pub fn [<$name _load16_s>](
-                    slice: &mut &[u8],
-                ) -> Result<$type, LEB128Error> {
-                    let value: i16 = $leb_fn(slice)? as i16;
-                    Ok(value as $type)
-                }
-                #[inline(always)]
-                pub fn [<$name _load16_u>](
-                    slice: &mut &[u8],
-                ) -> Result<$type, LEB128Error> {
-                    let value: u16 = $leb_fn(slice)? as u16;
-                    Ok(value as $type)
-                }
-                #[inline(always)]
-                pub fn [<$name _load32_s>](
-                    slice: &mut &[u8],
-                ) -> Result<$type, LEB128Error> {
-                    let value: i32 = $leb_fn(slice)? as i32;
-                    Ok(value as $type)
-                }
-                #[inline(always)]
-                pub fn [<$name _load32_u>](
-                    slice: &mut &[u8],
-                ) -> Result<$type, LEB128Error> {
-                    let value: u32 = $leb_fn(slice)? as u32;
-                    Ok(value as $type)
+                    mem: &[u8],
+                    addr: usize
+                ) -> Result<$type, WasmMemoryError> {
+                    if addr + $num_bytes > mem.len() {
+                        return Err(WasmMemoryError(
+                            concat!(stringify!($name), ".load out of bounds").to_string()
+                        ));
+                    }
+                    let bytes = &mem[addr..addr + $num_bytes];
+                    Ok(<$type>::from_le_bytes(bytes.try_into().unwrap()))
                 }
             }
         };
     }
 
-    macro_rules! define_load_float {
-        ($name:literal, $type:ty) => {
-            paste::paste! {
+    macro_rules! define_partial_load_fn {
+        ($fn_name:ident, $ret_type:ty, $inner_type:ty, $num_bytes:expr, $extend:expr) => {
+            paste! {
                 #[inline(always)]
-                pub fn [<$name _load>](
-                    slice: &mut &[u8],
-                ) -> Result<$type, LEB128Error> {
-                    read_leb128_u(slice).map(|result| result as $type)
+                pub fn [<$fn_name>](
+                    mem: &[u8],
+                    addr: usize
+                ) -> Result<$ret_type, WasmMemoryError>
+                {
+                    if addr + $num_bytes > mem.len() {
+                        return Err(WasmMemoryError(
+                            concat!(stringify!($fn_name), " out of bounds").to_string()
+                        ));
+                    }
+                    let mut buf = [0u8; $num_bytes];
+                    buf.copy_from_slice(&mem[addr..addr + $num_bytes]);
+
+                    Ok(($extend)(<$inner_type>::from_le_bytes(buf)) as $ret_type)
                 }
             }
         };
     }
 
-    define_load_int!("i32", i32, read_leb128_s);
-    define_load_int!("i64", i64, read_leb128_s);
-    define_load_float!("f32", f32);
-    define_load_float!("f64", f64);
+    macro_rules! define_store_fn {
+        ($name:ident, $type:ty, $num_bytes:expr) => {
+            paste! {
+                #[inline(always)]
+                pub fn [<$name _store>](
+                    mem: &mut [u8],
+                    addr: usize,
+                    value: $type
+                ) -> Result<(), WasmMemoryError> {
+                    if addr + $num_bytes > mem.len() {
+                        return Err(WasmMemoryError(
+                            concat!(stringify!($name), ".store out of bounds").to_string()
+                        ));
+                    }
+                    let bytes = value.to_le_bytes();
+                    mem[addr..addr + $num_bytes].copy_from_slice(&bytes);
+                    Ok(())
+                }
+            }
+        };
+    }
+
+    macro_rules! define_partial_store_fn {
+        ($fn_name:ident, $type:ty, $num_bytes:expr) => {
+            paste! {
+                #[inline(always)]
+                pub fn [<$fn_name>](
+                    mem: &mut [u8],
+                    addr: usize,
+                    value: $type
+                ) -> Result<(), WasmMemoryError> {
+                    if addr + $num_bytes > mem.len() {
+                        return Err(WasmMemoryError(
+                            concat!(stringify!($fn_name), " out of bounds").to_string()
+                        ));
+                    }
+                    let full_bytes = value.to_le_bytes();
+                    mem[addr..addr + $num_bytes]
+                        .copy_from_slice(&full_bytes[..$num_bytes]);
+                    Ok(())
+                }
+            }
+        };
+    }
+
+    define_load_fn!(i32, i32, 4);
+    define_load_fn!(i64, i64, 8);
+    define_load_fn!(f32, f32, 4);
+    define_load_fn!(f64, f64, 8);
+    define_store_fn!(i32, i32, 4);
+    define_store_fn!(i64, i64, 8);
+    define_store_fn!(f32, f32, 4);
+    define_store_fn!(f64, f64, 8);
+    define_partial_load_fn!(i32_load8_s, i32, i8, 1, |v: i8| v as i32);
+    define_partial_load_fn!(i32_load8_u, i32, u8, 1, |v: u8| v as i32);
+    define_partial_load_fn!(i32_load16_s, i32, i16, 2, |v: i16| v as i32);
+    define_partial_load_fn!(i32_load16_u, i32, u16, 2, |v: u16| v as i32);
+    define_partial_load_fn!(i64_load8_s, i64, i8, 1, |v: i8| v as i64);
+    define_partial_load_fn!(i64_load8_u, i64, u8, 1, |v: u8| v as i64);
+    define_partial_load_fn!(i64_load16_s, i64, i16, 2, |v: i16| v as i64);
+    define_partial_load_fn!(i64_load16_u, i64, u16, 2, |v: u16| v as i64);
+    define_partial_load_fn!(i64_load32_s, i64, i32, 4, |v: i32| v as i64);
+    define_partial_load_fn!(i64_load32_u, i64, u32, 4, |v: u32| v as i64);
+    define_partial_store_fn!(i32_store8, i32, 1);
+    define_partial_store_fn!(i32_store16, i32, 2);
+    define_partial_store_fn!(i64_store8, i64, 1);
+    define_partial_store_fn!(i64_store16, i64, 2);
+    define_partial_store_fn!(i64_store32, i64, 4);
+
+    pub fn read_memarg(iter: &mut &[u8]) -> (u32, u32) {
+        let align = read_leb128_u(iter).expect("Failed to read align as LEB128");
+        let offset = read_leb128_u(iter).expect("Failed to read offset as LEB128");
+        (align as u32, offset as u32)
+    }
 }
