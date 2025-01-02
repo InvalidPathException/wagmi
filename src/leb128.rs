@@ -232,6 +232,7 @@ pub mod leb128 {
     define_partial_store_fn!(i64_store16, i64, 2);
     define_partial_store_fn!(i64_store32, i64, 4);
 
+    #[inline(always)]
     pub fn read_memarg(iter: &mut &[u8]) -> (u32, u32) {
         let align = read_leb128_u(iter).expect("Failed to read align as LEB128");
         let offset = read_leb128_u(iter).expect("Failed to read offset as LEB128");

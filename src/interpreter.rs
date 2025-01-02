@@ -420,7 +420,12 @@ fn execute_opcode(
             unary_fn!(stack, f32, f32, |x: f32| x.floor());
         }
         Opcode::F32_TRUNC => {
-            // Code for F32_TRUNC
+            unary_fn!(stack, f32, i32, |x: f32| {
+                if x.is_nan() || x.is_infinite() || x < i32::MIN as f32 || x > i32::MAX as f32 {
+                    panic!("Invalid conversion: F32_TRUNC failed");
+                }
+                x.trunc() as i32
+            });
         }
         Opcode::F32_NEAREST => {
             unary_fn!(stack, f32, f32, |x: f32| x.round());
@@ -462,7 +467,12 @@ fn execute_opcode(
             unary_fn!(stack, f64, f64, |x: f64| x.floor());
         }
         Opcode::F64_TRUNC => {
-            // Code for F64_TRUNC
+            unary_fn!(stack, f64, i64, |x: f64| {
+                if x.is_nan() || x.is_infinite() || x < i64::MIN as f64 || x > i64::MAX as f64 {
+                    panic!("Invalid conversion: F64_TRUNC failed");
+                }
+                x.trunc() as i64
+            });
         }
         Opcode::F64_NEAREST => {
             unary_fn!(stack, f64, f64, |x: f64| x.round());
