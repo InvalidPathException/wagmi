@@ -29,7 +29,7 @@ macro_rules! define_name_map {
         }
     };
 }
-
+#[allow(dead_code)]
 #[allow(non_camel_case_types)]
 pub mod opcodes {
     define_name_map!(
@@ -216,6 +216,7 @@ pub enum WasmValue {
     F64(f64),
 }
 
+#[allow(dead_code)]
 impl WasmValue {
     #[inline(always)]
     pub fn from_i32(value: i32) -> Self {

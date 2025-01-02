@@ -2,7 +2,6 @@ pub mod leb128 {
     use paste::paste;
     use std::error::Error;
     use std::fmt;
-    use std::io::Read;
 
     #[derive(Debug)]
     pub struct LEB128Error(String);
