@@ -1,4 +1,5 @@
-use crate::specs::{op_impl, opcodes::Opcode, WasmValue, leb128};
+use crate::leb128::leb128;
+use crate::specs::{op_impl, opcodes::Opcode, WasmValue};
 use crate::{binary_fn, div_f, div_s, div_u, memory_load, rem_s, rem_u, unary_fn};
 use std::io::Read;
 
@@ -88,46 +89,46 @@ fn execute_opcode(
             // Code for GLOBAL_SET
         }
         Opcode::I32_LOAD => {
-            memory_load!(stack, memory, I32, op_impl::i32_load)
+            memory_load!(stack, memory, I32, leb128::i32_load)
         }
         Opcode::I64_LOAD => {
-            memory_load!(stack, memory, I64, op_impl::i64_load)
+            memory_load!(stack, memory, I64, leb128::i64_load)
         }
         Opcode::F32_LOAD => {
-            memory_load!(stack, memory, F32, op_impl::f32_load)
+            memory_load!(stack, memory, F32, leb128::f32_load)
         }
         Opcode::F64_LOAD => {
-            memory_load!(stack, memory, F64, op_impl::f64_load)
+            memory_load!(stack, memory, F64, leb128::f64_load)
         }
         Opcode::I32_LOAD8_S => {
-            memory_load!(stack, memory, I32, op_impl::i32_load8_s)
+            memory_load!(stack, memory, I32, leb128::i32_load8_s)
         }
         Opcode::I32_LOAD8_U => {
-            memory_load!(stack, memory, I32, op_impl::i32_load8_u)
+            memory_load!(stack, memory, I32, leb128::i32_load8_u)
         }
         Opcode::I32_LOAD16_S => {
-            memory_load!(stack, memory, I32, op_impl::i32_load16_s)
+            memory_load!(stack, memory, I32, leb128::i32_load16_s)
         }
         Opcode::I32_LOAD16_U => {
-            memory_load!(stack, memory, I32, op_impl::i32_load16_u)
+            memory_load!(stack, memory, I32, leb128::i32_load16_u)
         }
         Opcode::I64_LOAD8_S => {
-            memory_load!(stack, memory, I64, op_impl::i64_load8_s)
+            memory_load!(stack, memory, I64, leb128::i64_load8_s)
         }
         Opcode::I64_LOAD8_U => {
-            memory_load!(stack, memory, I64, op_impl::i64_load8_u)
+            memory_load!(stack, memory, I64, leb128::i64_load8_u)
         }
         Opcode::I64_LOAD16_S => {
-            memory_load!(stack, memory, I64, op_impl::i64_load16_s)
+            memory_load!(stack, memory, I64, leb128::i64_load16_s)
         }
         Opcode::I64_LOAD16_U => {
-            memory_load!(stack, memory, I64, op_impl::i64_load16_u)
+            memory_load!(stack, memory, I64, leb128::i64_load16_u)
         }
         Opcode::I64_LOAD32_S => {
-            memory_load!(stack, memory, I64, op_impl::i64_load32_s)
+            memory_load!(stack, memory, I64, leb128::i64_load32_s)
         }
         Opcode::I64_LOAD32_U => {
-            memory_load!(stack, memory, I64, op_impl::i64_load32_u)
+            memory_load!(stack, memory, I64, leb128::i64_load32_u)
         }
         Opcode::I32_STORE => {
             // Code for I32_STORE
