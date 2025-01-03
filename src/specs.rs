@@ -294,7 +294,7 @@ pub mod op_impl {
 
     #[macro_export]
     macro_rules! binary_fn {
-        ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {{
+        ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {
             paste::paste! {
                 let val1 = $stack.pop().expect("Stack underflow").[<to_ $in_type>]()
                     .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
@@ -303,12 +303,12 @@ pub mod op_impl {
                     .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
                 *top = WasmValue::[<$out_type:upper>]($func(val2, val1));
             }
-        }};
+        };
     }
 
     #[macro_export]
     macro_rules! div_s {
-    ($stack:expr, $type:ident) => {{
+    ($stack:expr, $type:ident) => {
             paste::paste! {
                 let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
                     .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
@@ -322,12 +322,12 @@ pub mod op_impl {
 
                 *top = WasmValue::[<$type:upper>](val2.wrapping_div(val1));
             }
-        }};
+        };
     }
 
     #[macro_export]
     macro_rules! div_u {
-    ($stack:expr, $type:ident) => {{
+    ($stack:expr, $type:ident) => {
             paste::paste! {
                 let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
                     .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
@@ -341,12 +341,12 @@ pub mod op_impl {
 
                 *top = WasmValue::[<$type:upper>]((val2 as u64).wrapping_div(val1 as u64) as $type);
             }
-        }};
+        };
     }
 
     #[macro_export]
     macro_rules! rem_s {
-        ($stack:expr, $type:ident) => {{
+        ($stack:expr, $type:ident) => {
             paste::paste! {
                 let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
                     .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
@@ -360,12 +360,12 @@ pub mod op_impl {
 
                 *top = WasmValue::[<$type:upper>](val2.wrapping_rem(val1));
             }
-        }};
+        };
     }
 
     #[macro_export]
     macro_rules! rem_u {
-        ($stack:expr, $type:ident) => {{
+        ($stack:expr, $type:ident) => {
             paste::paste! {
                 let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
                     .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
@@ -379,12 +379,12 @@ pub mod op_impl {
 
                 *top = WasmValue::[<$type:upper>]((val2 as u64).wrapping_rem(val1 as u64) as $type);
             }
-        }};
+        };
     }
 
     #[macro_export]
     macro_rules! div_f {
-        ($stack:expr, $type:ident) => {{
+        ($stack:expr, $type:ident) => {
             paste::paste! {
                 let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
                     .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
@@ -394,19 +394,19 @@ pub mod op_impl {
                 
                 *top = WasmValue::[<$type:upper>](val2 / val1);
             }
-        }};
+        };
     }
 
     #[macro_export]
     macro_rules! unary_fn {
-        ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {{
+        ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {
             paste::paste! {
                 let top = $stack.last_mut().expect("Stack underflow");
                 let val = top.[<to_ $in_type>]()
                     .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
                 *top = WasmValue::[<$out_type:upper>]($func(val));
             }
-        }};
+        };
     }
 
     macro_rules! define_irelop {
