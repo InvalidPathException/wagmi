@@ -1,6 +1,6 @@
 use crate::leb128::leb128;
 use crate::specs::{opcodes::Opcode, WasmValue};
-use crate::{binary_fn, div_f, div_s, div_u, memory_load, memory_store, rem_s, rem_u, trunc, unary_fn};
+use crate::{binary_fn, divrem, div_f, memory_load, memory_store, trunc, unary_fn, };
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -349,16 +349,16 @@ fn execute_opcode(
             binary_fn!(stack, i32, i32, |a: i32, b: i32| a.wrapping_mul(b));
         }
         Opcode::I32_DIV_S => {
-            div_s!(stack, i32);
+            divrem!(stack, i32, |val1, val2| val2.wrapping_div(val1));
         }
         Opcode::I32_DIV_U => {
-            div_u!(stack, i32);
+            divrem!(stack, i32, |val1, val2| (val2 as u32).wrapping_div(val1 as u32) as i32);
         }
         Opcode::I32_REM_S => {
-            rem_s!(stack, i32);
+            divrem!(stack, i32, |val1, val2| val2.wrapping_rem(val1));
         }
         Opcode::I32_REM_U => {
-            rem_u!(stack, i32);
+            divrem!(stack, i32, |val1, val2| (val2 as u32).wrapping_rem(val1 as u32) as i32);
         }
         Opcode::I32_AND => {
             binary_fn!(stack, i32, i32, |a: i32, b: i32| a & b);
@@ -403,16 +403,16 @@ fn execute_opcode(
             binary_fn!(stack, i64, i64, |a: i64, b: i64| a.wrapping_mul(b));
         }
         Opcode::I64_DIV_S => {
-            div_s!(stack, i64);
+            divrem!(stack, i64, |val1, val2| val2.wrapping_div(val1));
         }
         Opcode::I64_DIV_U => {
-            div_u!(stack, i64);
+            divrem!(stack, i64, |val1, val2| (val2 as u64).wrapping_div(val1 as u64) as i64);
         }
         Opcode::I64_REM_S => {
-            rem_s!(stack, i64);
+            divrem!(stack, i64, |val1, val2| val2.wrapping_rem(val1));
         }
         Opcode::I64_REM_U => {
-            rem_u!(stack, i64);
+            divrem!(stack, i64, |val1, val2| (val2 as u64).wrapping_rem(val1 as u64) as i64);
         }
         Opcode::I64_AND => {
             binary_fn!(stack, i64, i64, |a: i64, b: i64| a & b);
