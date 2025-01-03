@@ -1,13 +1,15 @@
 use crate::leb128::leb128;
-use crate::specs::{op_impl, opcodes::Opcode, WasmValue};
+use crate::specs::{opcodes::Opcode, WasmValue};
 use crate::{binary_fn, div_f, div_s, div_u, memory_load, memory_store, rem_s, rem_u, unary_fn};
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ControlFrame {
     arity: u32,
     continuation: usize,
     is_loop: bool,
 }
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct StackFrame {
     locals: Vec<WasmValue>,
@@ -227,124 +229,124 @@ fn execute_opcode(
             stack.push(WasmValue::F64(value));
         }
         Opcode::I32_EQZ => {
-            unary_fn!(stack, i32, i32, |x: i32| if x == 0 { 1 } else { 0 });
+            unary_fn!(stack, i32, i32, |a: i32| if a == 0 { 1 } else { 0 });
         }
         Opcode::I32_EQ => {
-            binary_fn!(stack, i32, i32, op_impl::i32_eq);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| if a == b { 1 } else { 0 });
         }
         Opcode::I32_NE => {
-            binary_fn!(stack, i32, i32, op_impl::i32_ne);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| if a != b { 1 } else { 0 });
         }
         Opcode::I32_LT_S => {
-            binary_fn!(stack, i32, i32, op_impl::i32_lt_s);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| if a < b { 1 } else { 0 });
         }
         Opcode::I32_LT_U => {
-            binary_fn!(stack, i32, i32, op_impl::i32_lt_u);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| if (a as u32) < (b as u32) { 1 } else { 0 });
         }
         Opcode::I32_GT_S => {
-            binary_fn!(stack, i32, i32, op_impl::i32_gt_s);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| if a > b { 1 } else { 0 });
         }
         Opcode::I32_GT_U => {
-            binary_fn!(stack, i32, i32, op_impl::i32_gt_u);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| if (a as u32) > (b as u32) { 1 } else { 0 });
         }
         Opcode::I32_LE_S => {
-            binary_fn!(stack, i32, i32, op_impl::i32_le_s);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| if a <= b { 1 } else { 0 });
         }
         Opcode::I32_LE_U => {
-            binary_fn!(stack, i32, i32, op_impl::i32_le_u);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| if (a as u32) <= (b as u32) { 1 } else { 0 });
         }
         Opcode::I32_GE_S => {
-            binary_fn!(stack, i32, i32, op_impl::i32_ge_s);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| if a >= b { 1 } else { 0 });
         }
         Opcode::I32_GE_U => {
-            binary_fn!(stack, i32, i32, op_impl::i32_ge_u);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| if (a as u32) >= (b as u32) { 1 } else { 0 });
         }
         Opcode::I64_EQZ => {
-            unary_fn!(stack, i64, i32, |x: i64| if x == 0 { 1 } else { 0 });
+            unary_fn!(stack, i64, i32, |a: i64| if a == 0 { 1 } else { 0 });
         }
         Opcode::I64_EQ => {
-            binary_fn!(stack, i64, i32, op_impl::i64_eq);
+            binary_fn!(stack, i64, i32, |a: i64, b: i64| if a == b { 1 } else { 0 });
         }
         Opcode::I64_NE => {
-            binary_fn!(stack, i64, i32, op_impl::i64_ne);
+            binary_fn!(stack, i64, i32, |a: i64, b: i64| if a != b { 1 } else { 0 });
         }
         Opcode::I64_LT_S => {
-            binary_fn!(stack, i64, i32, op_impl::i64_lt_s);
+            binary_fn!(stack, i64, i32, |a: i64, b: i64| if a < b { 1 } else { 0 });
         }
         Opcode::I64_LT_U => {
-            binary_fn!(stack, i64, i32, op_impl::i64_lt_u);
+            binary_fn!(stack, i64, i32, |a: i64, b: i64| if (a as u64) < (b as u64) { 1 } else { 0 });
         }
         Opcode::I64_GT_S => {
-            binary_fn!(stack, i64, i32, op_impl::i64_gt_s);
+            binary_fn!(stack, i64, i32, |a: i64, b: i64| if a > b { 1 } else { 0 });
         }
         Opcode::I64_GT_U => {
-            binary_fn!(stack, i64, i32, op_impl::i64_gt_u);
+            binary_fn!(stack, i64, i32, |a: i64, b: i64| if (a as u64) > (b as u64) { 1 } else { 0 });
         }
         Opcode::I64_LE_S => {
-            binary_fn!(stack, i64, i32, op_impl::i64_le_s);
+            binary_fn!(stack, i64, i32, |a: i64, b: i64| if a <= b { 1 } else { 0 });
         }
         Opcode::I64_LE_U => {
-            binary_fn!(stack, i64, i32, op_impl::i64_le_u);
+            binary_fn!(stack, i64, i32, |a: i64, b: i64| if (a as u64) <= (b as u64) { 1 } else { 0 });
         }
         Opcode::I64_GE_S => {
-            binary_fn!(stack, i64, i32, op_impl::i64_ge_s);
+            binary_fn!(stack, i64, i32, |a: i64, b: i64| if a >= b { 1 } else { 0 });
         }
         Opcode::I64_GE_U => {
-            binary_fn!(stack, i64, i32, op_impl::i64_ge_u);
+            binary_fn!(stack, i64, i32, |a: i64, b: i64| if (a as u64) >= (b as u64) { 1 } else { 0 });
         }
         Opcode::F32_EQ => {
-            binary_fn!(stack, f32, i32, op_impl::f32_eq);
+            binary_fn!(stack, f32, i32, |a: f32, b: f32| if a == b { 1 } else { 0 });
         }
         Opcode::F32_NE => {
-            binary_fn!(stack, f32, i32, op_impl::f32_ne);
+            binary_fn!(stack, f32, i32, |a: f32, b: f32| if a != b { 1 } else { 0 });
         }
         Opcode::F32_LT => {
-            binary_fn!(stack, f32, i32, op_impl::f32_lt);
+            binary_fn!(stack, f32, i32, |a: f32, b: f32| if a < b { 1 } else { 0 });
         }
         Opcode::F32_GT => {
-            binary_fn!(stack, f32, i32, op_impl::f32_gt);
+            binary_fn!(stack, f32, i32, |a: f32, b: f32| if a > b { 1 } else { 0 });
         }
         Opcode::F32_LE => {
-            binary_fn!(stack, f32, i32, op_impl::f32_le);
+            binary_fn!(stack, f32, i32, |a: f32, b: f32| if a <= b { 1 } else { 0 });
         }
         Opcode::F32_GE => {
-            binary_fn!(stack, f32, i32, op_impl::f32_ge);
+            binary_fn!(stack, f32, i32, |a: f32, b: f32| if a >= b { 1 } else { 0 });
         }
         Opcode::F64_EQ => {
-            binary_fn!(stack, f64, i32, op_impl::f64_eq);
+            binary_fn!(stack, f64, i32, |a: f64, b: f64| if a == b { 1 } else { 0 });
         }
         Opcode::F64_NE => {
-            binary_fn!(stack, f64, i32, op_impl::f64_ne);
+            binary_fn!(stack, f64, i32, |a: f64, b: f64| if a != b { 1 } else { 0 });
         }
         Opcode::F64_LT => {
-            binary_fn!(stack, f64, i32, op_impl::f64_lt);
+            binary_fn!(stack, f64, i32, |a: f64, b: f64| if a < b { 1 } else { 0 });
         }
         Opcode::F64_GT => {
-            binary_fn!(stack, f64, i32, op_impl::f64_gt);
+            binary_fn!(stack, f64, i32, |a: f64, b: f64| if a > b { 1 } else { 0 });
         }
         Opcode::F64_LE => {
-            binary_fn!(stack, f64, i32, op_impl::f64_le);
+            binary_fn!(stack, f64, i32, |a: f64, b: f64| if a <= b { 1 } else { 0 });
         }
         Opcode::F64_GE => {
-            binary_fn!(stack, f64, i32, op_impl::f64_ge);
+            binary_fn!(stack, f64, i32, |a: f64, b: f64| if a >= b { 1 } else { 0 });
         }
         Opcode::I32_CLZ => {
-            unary_fn!(stack, i32, i32, |x: i32| x.leading_zeros() as i32);
+            unary_fn!(stack, i32, i32, |a: i32| a.leading_zeros() as i32);
         }
         Opcode::I32_CTZ => {
-            unary_fn!(stack, i32, i32, |x: i32| x.trailing_zeros() as i32);
+            unary_fn!(stack, i32, i32, |a: i32| a.trailing_zeros() as i32);
         }
         Opcode::I32_POPCNT => {
-            unary_fn!(stack, i32, i32, |x: i32| x.count_ones() as i32);
+            unary_fn!(stack, i32, i32, |a: i32| a.count_ones() as i32);
         }
         Opcode::I32_ADD => {
-            binary_fn!(stack, i32, i32, op_impl::i32_add);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| a.wrapping_add(b));
         }
         Opcode::I32_SUB => {
-            binary_fn!(stack, i32, i32, op_impl::i32_sub);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| a.wrapping_sub(b));
         }
         Opcode::I32_MUL => {
-            binary_fn!(stack, i32, i32, op_impl::i32_mul);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| a.wrapping_mul(b));
         }
         Opcode::I32_DIV_S => {
             div_s!(stack, i32);
@@ -359,46 +361,46 @@ fn execute_opcode(
             rem_u!(stack, i32);
         }
         Opcode::I32_AND => {
-            binary_fn!(stack, i32, i32, op_impl::i32_and);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| a & b);
         }
         Opcode::I32_OR => {
-            binary_fn!(stack, i32, i32, op_impl::i32_or);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| a | b);
         }
         Opcode::I32_XOR => {
-            binary_fn!(stack, i32, i32, op_impl::i32_xor);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| a ^ b);
         }
         Opcode::I32_SHL => {
-            binary_fn!(stack, i32, i32, op_impl::i32_shl);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| a.wrapping_shl(b as u32));
         }
         Opcode::I32_SHR_S => {
-            binary_fn!(stack, i32, i32, op_impl::i32_shr_s);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| a >> (b as u32));
         }
         Opcode::I32_SHR_U => {
-            binary_fn!(stack, i32, i32, op_impl::i32_shr_u);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| a.wrapping_shr(b as u32));
         }
         Opcode::I32_ROTL => {
-            binary_fn!(stack, i32, i32, op_impl::i32_rotl);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| a.rotate_left(b as u32));
         }
         Opcode::I32_ROTR => {
-            binary_fn!(stack, i32, i32, op_impl::i32_rotr);
+            binary_fn!(stack, i32, i32, |a: i32, b: i32| a.rotate_right(b as u32));
         }
         Opcode::I64_CLZ => {
-            unary_fn!(stack, i64, i64, |x: i64| x.leading_zeros() as i64);
+            unary_fn!(stack, i64, i64, |a: i64| a.leading_zeros() as i64);
         }
         Opcode::I64_CTZ => {
-            unary_fn!(stack, i64, i64, |x: i64| x.trailing_zeros() as i64);
+            unary_fn!(stack, i64, i64, |a: i64| a.trailing_zeros() as i64);
         }
         Opcode::I64_POPCNT => {
-            unary_fn!(stack, i64, i64, |x: i64| x.count_ones() as i64);
+            unary_fn!(stack, i64, i64, |a: i64| a.count_ones() as i64);
         }
         Opcode::I64_ADD => {
-            binary_fn!(stack, i64, i64, op_impl::i64_add);
+            binary_fn!(stack, i64, i64, |a: i64, b: i64| a.wrapping_add(b));
         }
         Opcode::I64_SUB => {
-            binary_fn!(stack, i64, i64, op_impl::i64_sub);
+            binary_fn!(stack, i64, i64, |a: i64, b: i64| a.wrapping_sub(b));
         }
         Opcode::I64_MUL => {
-            binary_fn!(stack, i64, i64, op_impl::i64_mul);
+            binary_fn!(stack, i64, i64, |a: i64, b: i64| a.wrapping_mul(b));
         }
         Opcode::I64_DIV_S => {
             div_s!(stack, i64);
@@ -413,197 +415,198 @@ fn execute_opcode(
             rem_u!(stack, i64);
         }
         Opcode::I64_AND => {
-            binary_fn!(stack, i64, i64, op_impl::i64_and);
+            binary_fn!(stack, i64, i64, |a: i64, b: i64| a & b);
         }
         Opcode::I64_OR => {
-            binary_fn!(stack, i64, i64, op_impl::i64_or);
+            binary_fn!(stack, i64, i64, |a: i64, b: i64| a | b);
         }
         Opcode::I64_XOR => {
-            binary_fn!(stack, i64, i64, op_impl::i64_xor);
+            binary_fn!(stack, i64, i64, |a: i64, b: i64| a ^ b);
         }
         Opcode::I64_SHL => {
-            binary_fn!(stack, i64, i64, op_impl::i64_shl);
+            binary_fn!(stack, i64, i64, |a: i64, b: i64| a.wrapping_shl(b as u32));
         }
         Opcode::I64_SHR_S => {
-            binary_fn!(stack, i64, i64, op_impl::i64_shr_s);
+            binary_fn!(stack, i64, i64, |a: i64, b: i64| a >> (b as u32));
         }
         Opcode::I64_SHR_U => {
-            binary_fn!(stack, i64, i64, op_impl::i64_shr_u);
+            binary_fn!(stack, i64, i64, |a: i64, b: i64| a.wrapping_shr(b as u32));
         }
         Opcode::I64_ROTL => {
-            binary_fn!(stack, i64, i64, op_impl::i64_rotl);
+            binary_fn!(stack, i64, i64, |a: i64, b: i64| a.rotate_left(b as u32));
         }
         Opcode::I64_ROTR => {
-            binary_fn!(stack, i64, i64, op_impl::i64_rotr);
+            binary_fn!(stack, i64, i64, |a: i64, b: i64| a.rotate_right(b as u32));
         }
         Opcode::F32_ABS => {
-            unary_fn!(stack, f32, f32, |x: f32| x.abs());
+            unary_fn!(stack, f32, f32, |a: f32| a.abs());
         }
         Opcode::F32_NEG => {
-            unary_fn!(stack, f32, f32, |x: f32| -x);
+            unary_fn!(stack, f32, f32, |a: f32| -a);
         }
         Opcode::F32_CEIL => {
-            unary_fn!(stack, f32, f32, |x: f32| x.ceil());
+            unary_fn!(stack, f32, f32, |a: f32| a.ceil());
         }
         Opcode::F32_FLOOR => {
-            unary_fn!(stack, f32, f32, |x: f32| x.floor());
+            unary_fn!(stack, f32, f32, |a: f32| a.floor());
         }
         Opcode::F32_TRUNC => {
-            unary_fn!(stack, f32, i32, |x: f32| {
-                if x.is_nan() || x.is_infinite() || x < i32::MIN as f32 || x > i32::MAX as f32 {
+            unary_fn!(stack, f32, i32, |a: f32| {
+                if a.is_nan() || a.is_infinite() || a < i32::MIN as f32 || a > i32::MAX as f32 {
                     panic!("Invalid conversion: F32_TRUNC failed");
                 }
-                x.trunc() as i32
+                a.trunc() as i32
             });
         }
         Opcode::F32_NEAREST => {
-            unary_fn!(stack, f32, f32, |x: f32| x.round());
+            unary_fn!(stack, f32, f32, |a: f32| a.round());
         }
         Opcode::F32_SQRT => {
-            unary_fn!(stack, f32, f32, |x: f32| x.sqrt());
+            unary_fn!(stack, f32, f32, |a: f32| a.sqrt());
         }
         Opcode::F32_ADD => {
-            binary_fn!(stack, f32, f32, op_impl::f32_add);
+            binary_fn!(stack, f32, f32, |a: f32, b: f32| a + b);
         }
         Opcode::F32_SUB => {
-            binary_fn!(stack, f32, f32, op_impl::f32_sub);
+            binary_fn!(stack, f32, f32, |a: f32, b: f32| a - b);
         }
         Opcode::F32_MUL => {
-            binary_fn!(stack, f32, f32, op_impl::f32_mul);
+            binary_fn!(stack, f32, f32, |a: f32, b: f32| a * b);
         }
         Opcode::F32_DIV => {
             div_f!(stack, f32);
         }
         Opcode::F32_MIN => {
-            binary_fn!(stack, f32, f32, op_impl::f32_min);
+            binary_fn!(stack, f32, f32, |a: f32, b: f32| a.min(b));
         }
         Opcode::F32_MAX => {
-            binary_fn!(stack, f32, f32, op_impl::f32_max);
+            binary_fn!(stack, f32, f32, |a: f32, b: f32| a.max(b));
         }
         Opcode::F32_COPYSIGN => {
-            binary_fn!(stack, f32, f32, op_impl::f32_copysign);
+            binary_fn!(stack, f32, f32, |a: f32, b: f32| a.copysign(b));
         }
         Opcode::F64_ABS => {
-            unary_fn!(stack, f64, f64, |x: f64| x.abs());
+            unary_fn!(stack, f64, f64, |a: f64| a.abs());
         }
         Opcode::F64_NEG => {
-            unary_fn!(stack, f64, f64, |x: f64| -x);
+            unary_fn!(stack, f64, f64, |a: f64| -a);
         }
         Opcode::F64_CEIL => {
-            unary_fn!(stack, f64, f64, |x: f64| x.ceil());
+            unary_fn!(stack, f64, f64, |a: f64| a.ceil());
         }
         Opcode::F64_FLOOR => {
-            unary_fn!(stack, f64, f64, |x: f64| x.floor());
+            unary_fn!(stack, f64, f64, |a: f64| a.floor());
         }
         Opcode::F64_TRUNC => {
-            unary_fn!(stack, f64, i64, |x: f64| {
-                if x.is_nan() || x.is_infinite() || x < i64::MIN as f64 || x > i64::MAX as f64 {
+            unary_fn!(stack, f64, i64, |a: f64| {
+                if a.is_nan() || a.is_infinite() || a < i64::MIN as f64 || a > i64::MAX as f64 {
                     panic!("Invalid conversion: F64_TRUNC failed");
                 }
-                x.trunc() as i64
+                a.trunc() as i64
             });
         }
         Opcode::F64_NEAREST => {
-            unary_fn!(stack, f64, f64, |x: f64| x.round());
+            unary_fn!(stack, f64, f64, |a: f64| a.round());
         }
         Opcode::F64_SQRT => {
-            unary_fn!(stack, f64, f64, |x: f64| x.sqrt());
+            unary_fn!(stack, f64, f64, |a: f64| a.sqrt());
         }
         Opcode::F64_ADD => {
-            binary_fn!(stack, f64, f64, op_impl::f64_add);
+            binary_fn!(stack, f64, f64, |a: f64, b: f64| a + b);
         }
         Opcode::F64_SUB => {
-            binary_fn!(stack, f64, f64, op_impl::f64_sub);
+            binary_fn!(stack, f64, f64, |a: f64, b: f64| a - b);
         }
         Opcode::F64_MUL => {
-            binary_fn!(stack, f64, f64, op_impl::f64_mul);
+            binary_fn!(stack, f64, f64, |a: f64, b: f64| a * b);
         }
         Opcode::F64_DIV => {
             div_f!(stack, f64);
         }
         Opcode::F64_MIN => {
-            binary_fn!(stack, f64, f64, op_impl::f64_min);
+            binary_fn!(stack, f64, f64, |a: f64, b: f64| a.min(b));
         }
         Opcode::F64_MAX => {
-            binary_fn!(stack, f64, f64, op_impl::f64_max);
+            binary_fn!(stack, f64, f64, |a: f64, b: f64| a.max(b));
         }
         Opcode::F64_COPYSIGN => {
-            binary_fn!(stack, f64, f64, op_impl::f64_copysign);
+            binary_fn!(stack, f64, f64, |a: f64, b: f64| a.copysign(b));
         }
+
         Opcode::I32_WRAP_I64 => {
-            unary_fn!(stack, i64, i32, |x: i64| x as i32);
+            unary_fn!(stack, i64, i32, |a: i64| a as i32);
         }
         Opcode::I32_TRUNC_F32_S => {
-            unary_fn!(stack, f32, i32, |x: f32| x as i32);
+            unary_fn!(stack, f32, i32, |a: f32| a as i32);
         }
         Opcode::I32_TRUNC_F32_U => {
-            unary_fn!(stack, f32, i32, |x: f32| (x as u32) as i32);
+            unary_fn!(stack, f32, i32, |a: f32| (a as u32) as i32);
         }
         Opcode::I32_TRUNC_F64_S => {
-            unary_fn!(stack, f64, i32, |x: f64| x as i32);
+            unary_fn!(stack, f64, i32, |a: f64| a as i32);
         }
         Opcode::I32_TRUNC_F64_U => {
-            unary_fn!(stack, f64, i32, |x: f64| (x as u32) as i32);
+            unary_fn!(stack, f64, i32, |a: f64| (a as u32) as i32);
         }
         Opcode::I64_EXTEND_I32_S => {
-            unary_fn!(stack, i32, i64, |x: i32| x as i64);
+            unary_fn!(stack, i32, i64, |a: i32| a as i64);
         }
         Opcode::I64_EXTEND_I32_U => {
-            unary_fn!(stack, i32, i64, |x: i32| (x as u32) as i64);
+            unary_fn!(stack, i32, i64, |a: i32| (a as u32) as i64);
         }
         Opcode::I64_TRUNC_F32_S => {
-            unary_fn!(stack, f32, i64, |x: f32| x as i64);
+            unary_fn!(stack, f32, i64, |a: f32| a as i64);
         }
         Opcode::I64_TRUNC_F32_U => {
-            unary_fn!(stack, f32, i64, |x: f32| (x as u64) as i64);
+            unary_fn!(stack, f32, i64, |a: f32| (a as u64) as i64);
         }
         Opcode::I64_TRUNC_F64_S => {
-            unary_fn!(stack, f64, i64, |x: f64| x as i64);
+            unary_fn!(stack, f64, i64, |a: f64| a as i64);
         }
         Opcode::I64_TRUNC_F64_U => {
-            unary_fn!(stack, f64, i64, |x: f64| (x as u64) as i64);
+            unary_fn!(stack, f64, i64, |a: f64| (a as u64) as i64);
         }
         Opcode::F32_CONVERT_I32_S => {
-            unary_fn!(stack, i32, f32, |x: i32| x as f32);
+            unary_fn!(stack, i32, f32, |a: i32| a as f32);
         }
         Opcode::F32_CONVERT_I32_U => {
-            unary_fn!(stack, i32, f32, |x: i32| (x as u32) as f32);
+            unary_fn!(stack, i32, f32, |a: i32| (a as u32) as f32);
         }
         Opcode::F32_CONVERT_I64_S => {
-            unary_fn!(stack, i64, f32, |x: i64| x as f32);
+            unary_fn!(stack, i64, f32, |a: i64| a as f32);
         }
         Opcode::F32_CONVERT_I64_U => {
-            unary_fn!(stack, i64, f32, |x: i64| (x as u64) as f32);
+            unary_fn!(stack, i64, f32, |a: i64| (a as u64) as f32);
         }
         Opcode::F32_DEMOTE_F64 => {
-            unary_fn!(stack, f64, f32, |x: f64| x as f32);
+            unary_fn!(stack, f64, f32, |a: f64| a as f32);
         }
         Opcode::F64_CONVERT_I32_S => {
-            unary_fn!(stack, i32, f64, |x: i32| x as f64);
+            unary_fn!(stack, i32, f64, |a: i32| a as f64);
         }
         Opcode::F64_CONVERT_I32_U => {
-            unary_fn!(stack, i32, f64, |x: i32| (x as u32) as f64);
+            unary_fn!(stack, i32, f64, |a: i32| (a as u32) as f64);
         }
         Opcode::F64_CONVERT_I64_S => {
-            unary_fn!(stack, i64, f64, |x: i64| x as f64);
+            unary_fn!(stack, i64, f64, |a: i64| a as f64);
         }
         Opcode::F64_CONVERT_I64_U => {
-            unary_fn!(stack, i64, f64, |x: i64| (x as u64) as f64);
+            unary_fn!(stack, i64, f64, |a: i64| (a as u64) as f64);
         }
         Opcode::F64_PROMOTE_F32 => {
-            unary_fn!(stack, f32, f64, |x: f32| x as f64);
+            unary_fn!(stack, f32, f64, |a: f32| a as f64);
         }
         Opcode::I32_REINTERPRET_F32 => {
-            unary_fn!(stack, i32, f32, |x: i32| f32::from_bits(x as u32));
+            unary_fn!(stack, i32, f32, |a: i32| f32::from_bits(a as u32));
         }
         Opcode::I64_REINTERPRET_F64 => {
-            unary_fn!(stack, i64, f64, |x: i64| f64::from_bits(x as u64));
+            unary_fn!(stack, i64, f64, |a: i64| f64::from_bits(a as u64));
         }
         Opcode::F32_REINTERPRET_I32 => {
-            unary_fn!(stack, f32, i32, |x: f32| x.to_bits() as i32);
+            unary_fn!(stack, f32, i32, |a: f32| a.to_bits() as i32);
         }
         Opcode::F64_REINTERPRET_I64 => {
-            unary_fn!(stack, f64, i64, |x: f64| x.to_bits() as i64);
+            unary_fn!(stack, f64, i64, |a: f64| a.to_bits() as i64);
         }
     }
 }

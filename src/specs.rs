@@ -289,292 +289,119 @@ impl WasmValue {
     }
 }
 
-pub mod op_impl {
-    use paste::paste;
-
     #[macro_export]
-    macro_rules! binary_fn {
-        ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {
-            paste::paste! {
-                let val1 = $stack.pop().expect("Stack underflow").[<to_ $in_type>]()
-                    .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
-                let top = $stack.last_mut().expect("Stack underflow");
-                let val2 = top.[<to_ $in_type>]()
-                    .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
-                *top = WasmValue::[<$out_type:upper>]($func(val2, val1));
+macro_rules! binary_fn {
+    ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {
+        paste::paste! {
+            let val1 = $stack.pop().expect("Stack underflow").[<to_ $in_type>]()
+                .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
+            let top = $stack.last_mut().expect("Stack underflow");
+            let val2 = top.[<to_ $in_type>]()
+                .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
+            *top = WasmValue::[<$out_type:upper>]($func(val2, val1));
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! div_s {
+($stack:expr, $type:ident) => {
+        paste::paste! {
+            let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
+                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+            let top = $stack.last_mut().expect("Stack underflow");
+            let val2 = top.[<to_ $type>]()
+                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+
+            if val1 == 0 {
+                panic!("Division by zero");
             }
-        };
-    }
 
-    #[macro_export]
-    macro_rules! div_s {
+            *top = WasmValue::[<$type:upper>](val2.wrapping_div(val1));
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! div_u {
+($stack:expr, $type:ident) => {
+        paste::paste! {
+            let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
+                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+            let top = $stack.last_mut().expect("Stack underflow");
+            let val2 = top.[<to_ $type>]()
+                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+
+            if val1 == 0 {
+                panic!("Division by zero");
+            }
+
+            *top = WasmValue::[<$type:upper>]((val2 as u64).wrapping_div(val1 as u64) as $type);
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! rem_s {
     ($stack:expr, $type:ident) => {
-            paste::paste! {
-                let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
-                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-                let top = $stack.last_mut().expect("Stack underflow");
-                let val2 = top.[<to_ $type>]()
-                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+        paste::paste! {
+            let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
+                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+            let top = $stack.last_mut().expect("Stack underflow");
+            let val2 = top.[<to_ $type>]()
+                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
 
-                if val1 == 0 {
-                    panic!("Division by zero");
-                }
-
-                *top = WasmValue::[<$type:upper>](val2.wrapping_div(val1));
+            if val1 == 0 {
+                panic!("Division by zero");
             }
-        };
-    }
 
-    #[macro_export]
-    macro_rules! div_u {
+            *top = WasmValue::[<$type:upper>](val2.wrapping_rem(val1));
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! rem_u {
     ($stack:expr, $type:ident) => {
-            paste::paste! {
-                let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
-                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-                let top = $stack.last_mut().expect("Stack underflow");
-                let val2 = top.[<to_ $type>]()
-                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+        paste::paste! {
+            let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
+                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+            let top = $stack.last_mut().expect("Stack underflow");
+            let val2 = top.[<to_ $type>]()
+                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
 
-                if val1 == 0 {
-                    panic!("Division by zero");
-                }
-
-                *top = WasmValue::[<$type:upper>]((val2 as u64).wrapping_div(val1 as u64) as $type);
+            if val1 == 0 {
+                panic!("Division by zero");
             }
-        };
-    }
 
-    #[macro_export]
-    macro_rules! rem_s {
-        ($stack:expr, $type:ident) => {
-            paste::paste! {
-                let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
-                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-                let top = $stack.last_mut().expect("Stack underflow");
-                let val2 = top.[<to_ $type>]()
-                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+            *top = WasmValue::[<$type:upper>]((val2 as u64).wrapping_rem(val1 as u64) as $type);
+        }
+    };
+}
 
-                if val1 == 0 {
-                    panic!("Division by zero");
-                }
+#[macro_export]
+macro_rules! div_f {
+    ($stack:expr, $type:ident) => {
+        paste::paste! {
+            let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
+                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+            let top = $stack.last_mut().expect("Stack underflow");
+            let val2 = top.[<to_ $type>]()
+                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
+            
+            *top = WasmValue::[<$type:upper>](val2 / val1);
+        }
+    };
+}
 
-                *top = WasmValue::[<$type:upper>](val2.wrapping_rem(val1));
-            }
-        };
-    }
-
-    #[macro_export]
-    macro_rules! rem_u {
-        ($stack:expr, $type:ident) => {
-            paste::paste! {
-                let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
-                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-                let top = $stack.last_mut().expect("Stack underflow");
-                let val2 = top.[<to_ $type>]()
-                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-
-                if val1 == 0 {
-                    panic!("Division by zero");
-                }
-
-                *top = WasmValue::[<$type:upper>]((val2 as u64).wrapping_rem(val1 as u64) as $type);
-            }
-        };
-    }
-
-    #[macro_export]
-    macro_rules! div_f {
-        ($stack:expr, $type:ident) => {
-            paste::paste! {
-                let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
-                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-                let top = $stack.last_mut().expect("Stack underflow");
-                let val2 = top.[<to_ $type>]()
-                    .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-                
-                *top = WasmValue::[<$type:upper>](val2 / val1);
-            }
-        };
-    }
-
-    #[macro_export]
-    macro_rules! unary_fn {
-        ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {
-            paste::paste! {
-                let top = $stack.last_mut().expect("Stack underflow");
-                let val = top.[<to_ $in_type>]()
-                    .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
-                *top = WasmValue::[<$out_type:upper>]($func(val));
-            }
-        };
-    }
-
-    macro_rules! define_irelop {
-        ($name:literal, $signed_type:ty, $unsigned_type:ty) => {
-            paste! {
-                #[inline(always)]
-                pub fn [<$name _eq>](a: $signed_type, b: $signed_type) -> i32 {
-                    if a ^ b == 0 { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _ne>](a: $signed_type, b: $signed_type) -> i32 {
-                    if a ^ b != 0 { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _lt_u>](a: $signed_type, b: $signed_type) -> i32 {
-                    if (a as $unsigned_type) < (b as $unsigned_type) { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _gt_u>](a: $signed_type, b: $signed_type) -> i32 {
-                    if (a as $unsigned_type) > (b as $unsigned_type) { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _le_u>](a: $signed_type, b: $signed_type) -> i32 {
-                    if (a as $unsigned_type) <= (b as $unsigned_type) { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _ge_u>](a: $signed_type, b: $signed_type) -> i32 {
-                    if (a as $unsigned_type) >= (b as $unsigned_type) { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _lt_s>](a: $signed_type, b: $signed_type) -> i32 {
-                    if a < b { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _gt_s>](a: $signed_type, b: $signed_type) -> i32 {
-                    if a > b { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _le_s>](a: $signed_type, b: $signed_type) -> i32 {
-                    if a <= b { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _ge_s>](a: $signed_type, b: $signed_type) -> i32 {
-                    if a >= b { 1 } else { 0 }
-                }
-            }
-        };
-    }
-
-    macro_rules! define_frelop {
-        ($name:literal, $float_type:ty) => {
-            paste! {
-                #[inline(always)]
-                pub fn [<$name _eq>](a: $float_type, b: $float_type) -> i32 {
-                    if a == b { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _ne>](a: $float_type, b: $float_type) -> i32 {
-                    if a != b { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _lt>](a: $float_type, b: $float_type) -> i32 {
-                    if a < b { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _gt>](a: $float_type, b: $float_type) -> i32 {
-                    if a > b { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _le>](a: $float_type, b: $float_type) -> i32 {
-                    if a <= b { 1 } else { 0 }
-                }
-                #[inline(always)]
-                pub fn [<$name _ge>](a: $float_type, b: $float_type) -> i32 {
-                    if a >= b { 1 } else { 0 }
-                }
-            }
-        };
-    }
-
-    macro_rules! define_ibinop {
-        ($name:literal, $type:ty) => {
-            paste! {
-                #[inline(always)]
-                pub fn [<$name _add>](a: $type, b: $type) -> $type {
-                    a.wrapping_add(b)
-                }
-                #[inline(always)]
-                pub fn [<$name _sub>](a: $type, b: $type) -> $type {
-                    a.wrapping_sub(b)
-                }
-                #[inline(always)]
-                pub fn [<$name _mul>](a: $type, b: $type) -> $type {
-                    a.wrapping_mul(b)
-                }
-                #[inline(always)]
-                pub fn [<$name _and>](a: $type, b: $type) -> $type {
-                    a & b
-                }
-                #[inline(always)]
-                pub fn [<$name _or>](a: $type, b: $type) -> $type {
-                    a | b
-                }
-                #[inline(always)]
-                pub fn [<$name _xor>](a: $type, b: $type) -> $type {
-                    a ^ b
-                }
-                #[inline(always)]
-                pub fn [<$name _shl>](a: $type, b: $type) -> $type {
-                    a.wrapping_shl(b as u32)
-                }
-                #[inline(always)]
-                pub fn [<$name _shr_s>](a: $type, b: $type) -> $type {
-                    a >> (b as u32)
-                }
-                #[inline(always)]
-                pub fn [<$name _shr_u>](a: $type, b: $type) -> $type {
-                    a.wrapping_shr(b as u32)
-                }
-                #[inline(always)]
-                pub fn [<$name _rotl>](a: $type, b: $type) -> $type {
-                    a.rotate_left(b as u32)
-                }
-                #[inline(always)]
-                pub fn [<$name _rotr>](a: $type, b: $type) -> $type {
-                    a.rotate_right(b as u32)
-                }
-            }
-        };
-    }
-
-    macro_rules! define_fbinop {
-        ($name:literal, $type:ty) => {
-            paste! {
-                #[inline(always)]
-                pub fn [<$name _add>](a: $type, b: $type) -> $type {
-                    a + b
-                }
-                #[inline(always)]
-                pub fn [<$name _sub>](a: $type, b: $type) -> $type {
-                    a - b
-                }
-                #[inline(always)]
-                pub fn [<$name _mul>](a: $type, b: $type) -> $type {
-                    a * b
-                }
-                #[inline(always)]
-                pub fn [<$name _min>](a: $type, b: $type) -> $type {
-                    a.min(b)
-                }
-                #[inline(always)]
-                pub fn [<$name _max>](a: $type, b: $type) -> $type {
-                    a.max(b)
-                }
-                #[inline(always)]
-                pub fn [<$name _copysign>](a: $type, b: $type) -> $type {
-                    a.copysign(b)
-                }
-            }
-        };
-    }
-
-    define_irelop!("i32", i32, u32);
-    define_irelop!("i64", i64, u64);
-    define_frelop!("f32", f32);
-    define_frelop!("f64", f64);
-    define_ibinop!("i32", i32);
-    define_ibinop!("i64", i64);
-    define_fbinop!("f32", f32);
-    define_fbinop!("f64", f64);
+#[macro_export]
+macro_rules! unary_fn {
+    ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {
+        paste::paste! {
+            let top = $stack.last_mut().expect("Stack underflow");
+            let val = top.[<to_ $in_type>]()
+                .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
+            *top = WasmValue::[<$out_type:upper>]($func(val));
+        }
+    };
 }
