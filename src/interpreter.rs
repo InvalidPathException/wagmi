@@ -1,11 +1,25 @@
 use crate::leb128::leb128;
 use crate::specs::{op_impl, opcodes::Opcode, WasmValue};
 use crate::{binary_fn, div_f, div_s, div_u, memory_load, memory_store, rem_s, rem_u, unary_fn};
-use std::io::Read;
+
+#[derive(Debug, Clone)]
+struct ControlFrame {
+    arity: u32,
+    continuation: usize,
+    is_loop: bool,
+}
+#[derive(Debug, Clone)]
+struct StackFrame {
+    locals: Vec<WasmValue>,
+    control_stack: Vec<ControlFrame>,
+    return_address: usize,
+}
+
 #[allow(dead_code)]
 fn execute_opcode(
     opcode: Opcode,
     stack: &mut Vec<WasmValue>,
+    ctrl_stack: &mut Vec<ControlFrame>,
     memory: &mut Vec<u8>,
     iter: &mut &[u8],
 ) {
@@ -31,11 +45,26 @@ fn execute_opcode(
         Opcode::END => {
             // Code for END
         }
-        Opcode::BR => {
-            // Code for BR
+        Opcode::BR => {    
+            let depth = leb128::read_leb128_u(iter).expect("Failed to readLEB128 value");
+            let target_frame = &ctrl_stack[ctrl_stack.len() - depth as usize - 1];
+            *iter = &iter[target_frame.continuation..];
+            ctrl_stack.truncate(ctrl_stack.len() - depth as usize);
         }
         Opcode::BR_IF => {
-            // Code for BR_IF
+            let depth = leb128::read_leb128_s(iter).expect("Failed to read LEB128 value");
+
+            let condition = stack.pop().unwrap();
+            let condition_value = match condition {
+                WasmValue::I32(v) => v != 0,
+                _ => panic!("BR_IF condition must be i32"),
+            };
+
+            if condition_value {
+                let target_frame = &ctrl_stack[ctrl_stack.len() - depth as usize - 1];
+                *iter = &iter[target_frame.continuation..];
+                ctrl_stack.truncate(ctrl_stack.len() - depth as usize);
+            }
         }
         Opcode::BR_TABLE => {
             // Code for BR_TABLE
@@ -186,16 +215,16 @@ fn execute_opcode(
             ));
         }
         Opcode::F32_CONST => {
-            let mut buffer = [0u8; 4];
-            iter.read_exact(&mut buffer)
-                .expect("Failed to read f32.const value");
-            stack.push(WasmValue::F32(f32::from_le_bytes(buffer)));
+            let (buffer, remaining) = iter.split_at(4);
+            *iter = remaining;
+            let value = f32::from_le_bytes(buffer.try_into().expect("Invalid F32 bytes"));
+            stack.push(WasmValue::F32(value));
         }
         Opcode::F64_CONST => {
-            let mut buffer = [0u8; 8];
-            iter.read_exact(&mut buffer)
-                .expect("Failed to read f64.const value");
-            stack.push(WasmValue::F64(f64::from_le_bytes(buffer)));
+            let (buffer, remaining) = iter.split_at(8);
+            *iter = remaining;
+            let value = f64::from_le_bytes(buffer.try_into().expect("Invalid F64 bytes"));
+            stack.push(WasmValue::F64(value));
         }
         Opcode::I32_EQZ => {
             unary_fn!(stack, i32, i32, |x: i32| if x == 0 { 1 } else { 0 });
