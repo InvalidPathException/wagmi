@@ -1,6 +1,6 @@
 use crate::leb128::leb128;
 use crate::specs::{opcodes::Opcode, WasmValue};
-use crate::{binary_fn, div_f, div_s, div_u, memory_load, memory_store, rem_s, rem_u, unary_fn};
+use crate::{binary_fn, div_f, div_s, div_u, memory_load, memory_store, rem_s, rem_u, trunc, unary_fn};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -451,12 +451,7 @@ fn execute_opcode(
             unary_fn!(stack, f32, f32, |a: f32| a.floor());
         }
         Opcode::F32_TRUNC => {
-            unary_fn!(stack, f32, i32, |a: f32| {
-                if a.is_nan() || a.is_infinite() || a < i32::MIN as f32 || a > i32::MAX as f32 {
-                    panic!("Invalid conversion: F32_TRUNC failed");
-                }
-                a.trunc() as i32
-            });
+            trunc!(stack, f32, i32, i32::MIN as f32, i32::MAX as f32, |a: f32| a.trunc() as i32);
         }
         Opcode::F32_NEAREST => {
             unary_fn!(stack, f32, f32, |a: f32| a.round());
@@ -498,12 +493,7 @@ fn execute_opcode(
             unary_fn!(stack, f64, f64, |a: f64| a.floor());
         }
         Opcode::F64_TRUNC => {
-            unary_fn!(stack, f64, i64, |a: f64| {
-                if a.is_nan() || a.is_infinite() || a < i64::MIN as f64 || a > i64::MAX as f64 {
-                    panic!("Invalid conversion: F64_TRUNC failed");
-                }
-                a.trunc() as i64
-            });
+            trunc!(stack, f64, i64, i64::MIN as f64, i64::MAX as f64, |a: f64| a.trunc() as i64);
         }
         Opcode::F64_NEAREST => {
             unary_fn!(stack, f64, f64, |a: f64| a.round());
@@ -532,21 +522,20 @@ fn execute_opcode(
         Opcode::F64_COPYSIGN => {
             binary_fn!(stack, f64, f64, |a: f64, b: f64| a.copysign(b));
         }
-
         Opcode::I32_WRAP_I64 => {
             unary_fn!(stack, i64, i32, |a: i64| a as i32);
         }
         Opcode::I32_TRUNC_F32_S => {
-            unary_fn!(stack, f32, i32, |a: f32| a as i32);
+            trunc!(stack, f32, i32, i32::MIN as f32, i32::MAX as f32, |a: f32| a.trunc() as i32);
         }
         Opcode::I32_TRUNC_F32_U => {
-            unary_fn!(stack, f32, i32, |a: f32| (a as u32) as i32);
+            trunc!(stack, f32, i32, 0.0f32, u32::MAX as f32, (|a: f32| (a.trunc() as u32) as i32));
         }
         Opcode::I32_TRUNC_F64_S => {
-            unary_fn!(stack, f64, i32, |a: f64| a as i32);
+            trunc!(stack, f64, i32, i32::MIN as f64, i32::MAX as f64, |a: f64| a.trunc() as i32);
         }
         Opcode::I32_TRUNC_F64_U => {
-            unary_fn!(stack, f64, i32, |a: f64| (a as u32) as i32);
+            trunc!(stack, f64, i32, 0.0f64, u32::MAX as f64, (|a: f64| (a.trunc() as u32) as i32));
         }
         Opcode::I64_EXTEND_I32_S => {
             unary_fn!(stack, i32, i64, |a: i32| a as i64);
@@ -555,16 +544,16 @@ fn execute_opcode(
             unary_fn!(stack, i32, i64, |a: i32| (a as u32) as i64);
         }
         Opcode::I64_TRUNC_F32_S => {
-            unary_fn!(stack, f32, i64, |a: f32| a as i64);
+            trunc!(stack, f32, i64, i64::MIN as f32, i64::MAX as f32, |a: f32| a.trunc() as i64);
         }
         Opcode::I64_TRUNC_F32_U => {
-            unary_fn!(stack, f32, i64, |a: f32| (a as u64) as i64);
+            trunc!(stack, f32, i64, 0.0f32, u64::MAX as f32, (|a: f32| (a.trunc() as u64) as i64));
         }
         Opcode::I64_TRUNC_F64_S => {
-            unary_fn!(stack, f64, i64, |a: f64| a as i64);
+            trunc!(stack, f64, i64, i64::MIN as f64, i64::MAX as f64, |a: f64| a.trunc() as i64);
         }
         Opcode::I64_TRUNC_F64_U => {
-            unary_fn!(stack, f64, i64, |a: f64| (a as u64) as i64);
+            trunc!(stack, f64, i64, 0.0f64, u64::MAX as f64, (|a: f64| (a.trunc() as u64) as i64));
         }
         Opcode::F32_CONVERT_I32_S => {
             unary_fn!(stack, i32, f32, |a: i32| a as f32);
@@ -597,16 +586,16 @@ fn execute_opcode(
             unary_fn!(stack, f32, f64, |a: f32| a as f64);
         }
         Opcode::I32_REINTERPRET_F32 => {
-            unary_fn!(stack, i32, f32, |a: i32| f32::from_bits(a as u32));
-        }
-        Opcode::I64_REINTERPRET_F64 => {
-            unary_fn!(stack, i64, f64, |a: i64| f64::from_bits(a as u64));
-        }
-        Opcode::F32_REINTERPRET_I32 => {
             unary_fn!(stack, f32, i32, |a: f32| a.to_bits() as i32);
         }
-        Opcode::F64_REINTERPRET_I64 => {
+        Opcode::I64_REINTERPRET_F64 => {
             unary_fn!(stack, f64, i64, |a: f64| a.to_bits() as i64);
+        }
+        Opcode::F32_REINTERPRET_I32 => {
+            unary_fn!(stack, i32, f32, |a: i32| f32::from_bits(a as u32));
+        }
+        Opcode::F64_REINTERPRET_I64 => {
+            unary_fn!(stack, i64, f64, |a: i64| f64::from_bits(a as u64));
         }
     }
 }

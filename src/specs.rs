@@ -289,7 +289,7 @@ impl WasmValue {
     }
 }
 
-    #[macro_export]
+#[macro_export]
 macro_rules! binary_fn {
     ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {
         paste::paste! {
@@ -403,5 +403,17 @@ macro_rules! unary_fn {
                 .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
             *top = WasmValue::[<$out_type:upper>]($func(val));
         }
+    };
+}
+
+#[macro_export]
+macro_rules! trunc {
+    ($stack:expr, $in_type:ident, $out_type:ident, $min:expr, $max:expr, $convert:expr) => {
+        unary_fn!($stack, $in_type, $out_type, |a: $in_type| -> $out_type {
+            if a.is_nan() || a.is_infinite() || a < $min || a > $max {
+                panic!("Trap due to trunc from {} to {}", a, a as $out_type);
+            }
+            $convert(a)
+        });
     };
 }
