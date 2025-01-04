@@ -284,40 +284,6 @@ macro_rules! binary_fn {
 }
 
 #[macro_export]
-macro_rules! divrem {
-    ($stack:expr, $type:ident, |$val1:ident, $val2:ident| $op:expr) => {
-        paste::paste! {
-            let $val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
-                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-            let $val2 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
-                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-
-            if $val1 == 0 {
-                panic!("Division by zero");
-            }
-
-            let result = $op;
-            $stack.push(WasmValue::[<$type:upper>](result));
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! div_f {
-    ($stack:expr, $type:ident) => {
-        paste::paste! {
-            let val1 = $stack.pop().expect("Stack underflow").[<to_ $type>]()
-                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-            let top = $stack.last_mut().expect("Stack underflow");
-            let val2 = top.[<to_ $type>]()
-                .expect(concat!("Wrong type (expected ", stringify!($type), ")"));
-            
-            *top = WasmValue::[<$type:upper>](val2 / val1);
-        }
-    };
-}
-
-#[macro_export]
 macro_rules! unary_fn {
     ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {
         paste::paste! {
