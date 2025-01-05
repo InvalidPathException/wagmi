@@ -1,6 +1,6 @@
-use crate::leb128::leb128;
+use crate::leb128;
 use crate::specs::{opcodes::Opcode, WasmValue};
-use crate::{binary_fn, memory_load, memory_store, trunc, unary_fn};
+use crate::{memory_load, memory_store, binary_fn, unary_fn, trunc};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -55,14 +55,10 @@ fn execute_opcode(
         }
         Opcode::BR_IF => {
             let depth = leb128::read_leb128_s(iter).expect("Failed to read LEB128 value");
+            let cond = stack.pop().expect("Stack underflow from select")
+                .as_i32().expect("Condition must be of type i32");
 
-            let condition = stack.pop().unwrap();
-            let condition_value = match condition {
-                WasmValue::I32(v) => v != 0,
-                _ => panic!("BR_IF condition must be i32"),
-            };
-
-            if condition_value {
+            if cond != 0 {
                 let target_frame = &ctrl_stack[ctrl_stack.len() - depth as usize - 1];
                 *iter = &iter[target_frame.continuation..];
                 ctrl_stack.truncate(ctrl_stack.len() - depth as usize);
@@ -81,28 +77,25 @@ fn execute_opcode(
             // Code for CALL_INDIRECT
         }
         Opcode::DROP => {
-            if stack.pop().is_none() {
-                panic!("Stack underflow from drop");
-            }
+            stack.pop().expect("Stack underflow from drop");
         }
         Opcode::SELECT => {
-            let cond = stack.pop().expect("Stack underflow from select");
+            let cond = stack.pop().expect("Stack underflow from select")
+                .as_i32().expect("Condition must be of type i32");
             let val2 = stack.pop().expect("Stack underflow from select");
             let val1 = stack.pop().expect("Stack underflow from select");
-            let cond_as_i32 = cond.to_i32().expect("Condition must be of type i32");
 
-            if matches!(
-                (&val1, &val2),
+            match (&val1, &val2) {
                 (WasmValue::I32(_), WasmValue::I32(_))
-                    | (WasmValue::I64(_), WasmValue::I64(_))
-                    | (WasmValue::F32(_), WasmValue::F32(_))
-                    | (WasmValue::F64(_), WasmValue::F64(_))
-            ) == false
-            {
-                panic!("Type mismatch in select");
+                | (WasmValue::I64(_), WasmValue::I64(_))
+                | (WasmValue::F32(_), WasmValue::F32(_))
+                | (WasmValue::F64(_), WasmValue::F64(_)) => {
+                    stack.push(if cond != 0 { val1 } else { val2 });
+                }
+                _ => {
+                    panic!("Type mismatch in select");
+                }
             }
-
-            stack.push(if cond_as_i32 != 0 { val1 } else { val2 });
         }
         Opcode::LOCAL_GET => {
             // Code for LOCAL_GET
@@ -192,13 +185,10 @@ fn execute_opcode(
             stack.push(WasmValue::I32(memory.len() as i32));
         }
         Opcode::MEMORY_GROW => {
-            let n_pages = stack
-                .pop()
-                .expect("Stack underflow from grow")
-                .to_i32()
-                .expect("Expected i32 operand") as usize;
-
+            let n_pages = stack.pop().expect("Stack underflow from grow")
+                .as_i32().expect("Expected i32 operand") as usize;
             let new_size = memory.len() / 65535 + n_pages;
+            
             if n_pages > 0 && new_size <= 1024 {
                 memory.resize(new_size * 65535, 0);
                 stack.push(WasmValue::I32((new_size - n_pages) as i32));
@@ -207,26 +197,20 @@ fn execute_opcode(
             }
         }
         Opcode::I32_CONST => {
-            stack.push(WasmValue::I32(
-                leb128::read_leb128_s(iter).expect("Failed to read i32.const value") as i32,
-            ));
+            stack.push(WasmValue::I32(leb128::read_leb128_s(iter).expect("Failed to read i32.const value") as i32));
         }
         Opcode::I64_CONST => {
-            stack.push(WasmValue::I64(
-                leb128::read_leb128_s(iter).expect("Failed to read i64.const value"),
-            ));
+            stack.push(WasmValue::I64(leb128::read_leb128_s(iter).expect("Failed to read i64.const value")));
         }
         Opcode::F32_CONST => {
             let (buffer, remaining) = iter.split_at(4);
             *iter = remaining;
-            let value = f32::from_le_bytes(buffer.try_into().expect("Invalid F32 bytes"));
-            stack.push(WasmValue::F32(value));
+            stack.push(WasmValue::F32(f32::from_le_bytes(buffer.try_into().expect("Invalid F32 bytes"))));
         }
         Opcode::F64_CONST => {
             let (buffer, remaining) = iter.split_at(8);
             *iter = remaining;
-            let value = f64::from_le_bytes(buffer.try_into().expect("Invalid F64 bytes"));
-            stack.push(WasmValue::F64(value));
+            stack.push(WasmValue::F64(f64::from_le_bytes(buffer.try_into().expect("Invalid F64 bytes"))));
         }
         Opcode::I32_EQZ => {
             unary_fn!(stack, i32, i32, |a: i32| if a == 0 { 1 } else { 0 });

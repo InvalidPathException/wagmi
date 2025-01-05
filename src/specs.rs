@@ -236,36 +236,24 @@ impl WasmValue {
         WasmValue::F64(value)
     }
     #[inline(always)]
-    pub fn to_i32(&self) -> Option<i32> {
-        if let WasmValue::I32(v) = *self {
-            Some(v)
-        } else {
-            None
-        }
+    pub fn as_type<T>(&self, f: fn(WasmValue) -> Option<T>) -> Option<T> {
+        f(*self)
     }
     #[inline(always)]
-    pub fn to_i64(&self) -> Option<i64> {
-        if let WasmValue::I64(v) = *self {
-            Some(v)
-        } else {
-            None
-        }
+    pub fn as_i32(&self) -> Option<i32> {
+        self.as_type(|v| if let WasmValue::I32(val) = v { Some(val) } else { None })
     }
     #[inline(always)]
-    pub fn to_f32(&self) -> Option<f32> {
-        if let WasmValue::F32(v) = *self {
-            Some(v)
-        } else {
-            None
-        }
+    pub fn as_i64(&self) -> Option<i64> {
+        self.as_type(|v| if let WasmValue::I64(val) = v { Some(val) } else { None })
     }
     #[inline(always)]
-    pub fn to_f64(&self) -> Option<f64> {
-        if let WasmValue::F64(v) = *self {
-            Some(v)
-        } else {
-            None
-        }
+    pub fn as_f32(&self) -> Option<f32> {
+        self.as_type(|v| if let WasmValue::F32(val) = v { Some(val) } else { None })
+    }
+    #[inline(always)]
+    pub fn as_f64(&self) -> Option<f64> {
+        self.as_type(|v| if let WasmValue::F64(val) = v { Some(val) } else { None })
     }
 }
 
@@ -273,10 +261,10 @@ impl WasmValue {
 macro_rules! binary_fn {
     ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {
         paste::paste! {
-            let val1 = $stack.pop().expect("Stack underflow").[<to_ $in_type>]()
+            let val1 = $stack.pop().expect("Stack underflow").[<as_ $in_type>]()
                 .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
             let top = $stack.last_mut().expect("Stack underflow");
-            let val2 = top.[<to_ $in_type>]()
+            let val2 = top.[<as_ $in_type>]()
                 .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
             *top = WasmValue::[<$out_type:upper>]($func(val2, val1));
         }
@@ -288,7 +276,7 @@ macro_rules! unary_fn {
     ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {
         paste::paste! {
             let top = $stack.last_mut().expect("Stack underflow");
-            let val = top.[<to_ $in_type>]()
+            let val = top.[<as_ $in_type>]()
                 .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
             *top = WasmValue::[<$out_type:upper>]($func(val));
         }
