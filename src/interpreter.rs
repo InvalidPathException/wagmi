@@ -1,6 +1,7 @@
 use crate::leb128;
 use crate::specs::{opcodes::Opcode, WasmValue};
 use crate::{memory_load, memory_store, binary_fn, unary_fn, trunc};
+use crate::leb128::read_offset;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -55,8 +56,8 @@ fn execute_opcode(
         }
         Opcode::BR_IF => {
             let depth = leb128::read_leb128_s(iter).expect("Failed to read LEB128 value");
-            let cond = stack.pop().expect("Stack underflow from select")
-                .as_i32().expect("Condition must be of type i32");
+            let cond = <i32>::try_from(stack.pop().expect("Stack underflow from br_if"))
+                .unwrap_or_else(|err| panic!("Expected i32 operand: {}", err));
 
             if cond != 0 {
                 let target_frame = &ctrl_stack[ctrl_stack.len() - depth as usize - 1];
@@ -80,8 +81,8 @@ fn execute_opcode(
             stack.pop().expect("Stack underflow from drop");
         }
         Opcode::SELECT => {
-            let cond = stack.pop().expect("Stack underflow from select")
-                .as_i32().expect("Condition must be of type i32");
+            let cond = <i32>::try_from(stack.pop().expect("Stack underflow from select"))
+                .unwrap_or_else(|err| panic!("Expected i32 operand: {}", err));
             let val2 = stack.pop().expect("Stack underflow from select");
             let val1 = stack.pop().expect("Stack underflow from select");
 
@@ -113,80 +114,80 @@ fn execute_opcode(
             // Code for GLOBAL_SET
         }
         Opcode::I32_LOAD => {
-            memory_load!(stack, memory, I32, leb128::i32_load, leb128::read_offset(iter));
+            memory_load!(stack, memory, i32, 4, |v| v, read_offset(iter));
         }
         Opcode::I64_LOAD => {
-            memory_load!(stack, memory, I64, leb128::i64_load, leb128::read_offset(iter));
+            memory_load!(stack, memory, i64, 8, |v| v, read_offset(iter));
         }
         Opcode::F32_LOAD => {
-            memory_load!(stack, memory, F32, leb128::f32_load, leb128::read_offset(iter));
+            memory_load!(stack, memory, f32, 4, |v| v, read_offset(iter));
         }
         Opcode::F64_LOAD => {
-            memory_load!(stack, memory, F64, leb128::f64_load, leb128::read_offset(iter));
+            memory_load!(stack, memory, f64, 8, |v| v, read_offset(iter));
         }
         Opcode::I32_LOAD8_S => {
-            memory_load!(stack, memory, I32, leb128::i32_load8_s, leb128::read_offset(iter));
+            memory_load!(stack, memory, i8, 1, |v: i8| v as i32, read_offset(iter));
         }
         Opcode::I32_LOAD8_U => {
-            memory_load!(stack, memory, I32, leb128::i32_load8_u, leb128::read_offset(iter));
+            memory_load!(stack, memory, u8, 1, |v: u8| v as i32, read_offset(iter));
         }
         Opcode::I32_LOAD16_S => {
-            memory_load!(stack, memory, I32, leb128::i32_load16_s, leb128::read_offset(iter));
+            memory_load!(stack, memory, i16, 2, |v: i16| v as i32, read_offset(iter));
         }
         Opcode::I32_LOAD16_U => {
-            memory_load!(stack, memory, I32, leb128::i32_load16_u, leb128::read_offset(iter));
-        }        
+            memory_load!(stack, memory, u16, 2, |v: u16| v as i32, read_offset(iter));
+        }
         Opcode::I64_LOAD8_S => {
-            memory_load!(stack, memory, I64, leb128::i64_load8_s, leb128::read_offset(iter));
+            memory_load!(stack, memory, i8, 1, |v: i8| v as i64, read_offset(iter));
         }
         Opcode::I64_LOAD8_U => {
-            memory_load!(stack, memory, I64, leb128::i64_load8_u, leb128::read_offset(iter));
+            memory_load!(stack, memory, u8, 1, |v: u8| v as i64, read_offset(iter));
         }
         Opcode::I64_LOAD16_S => {
-            memory_load!(stack, memory, I64, leb128::i64_load16_s, leb128::read_offset(iter));
+            memory_load!(stack, memory, i16, 2, |v: i16| v as i64, read_offset(iter));
         }
         Opcode::I64_LOAD16_U => {
-            memory_load!(stack, memory, I64, leb128::i64_load16_u, leb128::read_offset(iter));
+            memory_load!(stack, memory, u16, 2, |v: u16| v as i64, read_offset(iter));
         }
         Opcode::I64_LOAD32_S => {
-            memory_load!(stack, memory, I64, leb128::i64_load32_s, leb128::read_offset(iter));
+            memory_load!(stack, memory, i32, 4, |v: i32| v as i64, read_offset(iter));
         }
         Opcode::I64_LOAD32_U => {
-            memory_load!(stack, memory, I64, leb128::i64_load32_u, leb128::read_offset(iter));
+            memory_load!(stack, memory, u32, 4, |v: u32| v as i64, read_offset(iter));
         }
         Opcode::I32_STORE => {
-            memory_store!(stack, &mut memory[..], I32, leb128::i32_store, leb128::read_offset(iter));
+            memory_store!(stack, memory, i32, 4, read_offset(iter));
         }
         Opcode::I64_STORE => {
-            memory_store!(stack, &mut memory[..], I64, leb128::i64_store, leb128::read_offset(iter));
+            memory_store!(stack, memory, i64, 8, read_offset(iter));
         }
         Opcode::F32_STORE => {
-            memory_store!(stack, &mut memory[..], F32, leb128::f32_store, leb128::read_offset(iter));
+            memory_store!(stack, memory, f32, 4, read_offset(iter));
         }
         Opcode::F64_STORE => {
-            memory_store!(stack, &mut memory[..], F64, leb128::f64_store, leb128::read_offset(iter));
+            memory_store!(stack, memory, f64, 8, read_offset(iter));
         }
         Opcode::I32_STORE8 => {
-            memory_store!(stack, &mut memory[..], I32, leb128::i32_store8, leb128::read_offset(iter));
+            memory_store!(stack, memory, i32, 0xFF, 1, read_offset(iter));
         }
         Opcode::I32_STORE16 => {
-            memory_store!(stack, &mut memory[..], I32, leb128::i32_store16, leb128::read_offset(iter));
+            memory_store!(stack, memory, i32, 0xFFFF, 2, read_offset(iter));
         }
         Opcode::I64_STORE8 => {
-            memory_store!(stack, &mut memory[..], I64, leb128::i64_store8, leb128::read_offset(iter));
+            memory_store!(stack, memory, i64, 0xFF, 1, read_offset(iter));
         }
         Opcode::I64_STORE16 => {
-            memory_store!(stack, &mut memory[..], I64, leb128::i64_store16, leb128::read_offset(iter));
+            memory_store!(stack, memory, i64, 0xFFFF, 2, read_offset(iter));
         }
         Opcode::I64_STORE32 => {
-            memory_store!(stack, &mut memory[..], I64, leb128::i64_store32, leb128::read_offset(iter));
+            memory_store!(stack, memory, i64, 0xFFFF_FFFF, 4, read_offset(iter));
         }
         Opcode::MEMORY_SIZE => {
             stack.push(WasmValue::I32(memory.len() as i32));
         }
         Opcode::MEMORY_GROW => {
-            let n_pages = stack.pop().expect("Stack underflow from grow")
-                .as_i32().expect("Expected i32 operand") as usize;
+            let n_pages = <i32>::try_from(stack.pop().expect("Stack underflow from grow"))
+                .unwrap_or_else(|err| panic!("Expected i32 operand: {}", err)) as usize;
             let new_size = memory.len() / 65535 + n_pages;
             
             if n_pages > 0 && new_size <= 1024 {

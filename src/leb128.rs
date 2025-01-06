@@ -1,4 +1,3 @@
-use paste::paste;
 use std::error::Error;
 use std::fmt;
 
@@ -60,176 +59,57 @@ pub(crate) fn read_leb128_u(slice: &mut &[u8]) -> Result<u64, LEB128Error> {
     Err(LEB128Error("Premature end of input".to_string()))
 }
 
-#[derive(Debug)]
-pub struct WasmMemoryError(String);
-
-impl fmt::Display for WasmMemoryError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl Error for WasmMemoryError {}
-
 #[macro_export]
 macro_rules! memory_load {
-    ($stack:expr, $memory:expr, $wasm_ty:ident, $load_fn:expr, $offset:expr) => {{
-        let base_addr = $stack
-            .pop()
-            .expect("Stack underflow when popping load address")
-            .as_i32()
-            .expect("Expected i32 memory address") as usize;
-
+    ($stack:expr, $memory:expr, $type:ty, $num_bytes:expr, $extend:expr, $offset:expr) => {
+        let base_addr = <i32>::try_from($stack.pop().expect("Stack underflow when popping load address"))
+            .unwrap_or_else(|err| panic!("Expected i32 memory address: {}", err)) as usize;
         let effective_addr = base_addr + $offset as usize;
+        if effective_addr + $num_bytes > $memory.len() {
+            panic!("Memory load out of bounds");
+        }
 
-        let value = $load_fn(&$memory, effective_addr)
-            .expect("Failed to load from memory");
+        let mut buf = [0u8; $num_bytes];
+        buf.copy_from_slice(&$memory[effective_addr..effective_addr + $num_bytes]);
 
-        $stack.push(WasmValue::$wasm_ty(value));
-    }};
+        let value = $extend(<$type>::from_le_bytes(buf));
+        $stack.push(WasmValue::from(value));
+    };
 }
 
 #[macro_export]
 macro_rules! memory_store {
-    ($stack:expr, $memory:expr, $wasm_ty:ident, $store_fn:expr, $offset:expr) => {{
-        let raw_value = $stack
-            .pop()
-            .expect("Stack underflow when popping store value");
+    ($stack:expr, $memory:expr, $type:ty, $mask:expr, $num_bytes:expr, $offset:expr) => {
+        let val = <$type>::try_from($stack.pop().expect("Stack underflow when popping store value"))
+            .unwrap_or_else(|err| panic!("Conversion error: {}", err));
 
-        let base_addr = $stack
-            .pop()
-            .expect("Stack underflow when popping store address")
-            .as_i32()
-            .expect("Expected i32 memory address") as usize;
-
+        let base_addr = <i32>::try_from($stack.pop().expect("Stack underflow when popping store address"))
+            .unwrap_or_else(|err| panic!("Expected i32 memory address: {}", err)) as usize;
         let effective_addr = base_addr + $offset as usize;
-
-        let typed_value = match raw_value {
-            WasmValue::$wasm_ty(v) => v,
-            _ => panic!(
-                "Expected a {} for store, got {:?}",
-                stringify!($wasm_ty),
-                raw_value
-            ),
-        };
-
-        $store_fn(&mut $memory, effective_addr, typed_value)
-            .expect("Failed to store in memory");
-    }};
-}
-
-
-macro_rules! define_load_fn {
-    ($name:ident, $type:ty, $num_bytes:expr) => {
-        paste! {
-            #[inline(always)]
-            pub fn [<$name _load>](
-                mem: &[u8],
-                addr: usize
-            ) -> Result<$type, WasmMemoryError> {
-                if addr + $num_bytes > mem.len() {
-                    return Err(WasmMemoryError(
-                        concat!(stringify!($name), ".load out of bounds").to_string()
-                    ));
-                }
-                let bytes = &mem[addr..addr + $num_bytes];
-                Ok(<$type>::from_le_bytes(bytes.try_into().unwrap()))
-            }
+        if effective_addr + $num_bytes > $memory.len() {
+            panic!("Memory store out of bounds");
         }
+
+        let masked_val = (val as u64) & $mask;
+        let bytes = masked_val.to_le_bytes();
+        $memory[effective_addr..effective_addr + $num_bytes].copy_from_slice(&bytes[..$num_bytes]);
+    };
+
+    ($stack:expr, $memory:expr, $type:ty, $num_bytes:expr, $offset:expr) => {
+        let val = <$type>::try_from($stack.pop().expect("Stack underflow when popping store value"))
+            .unwrap_or_else(|err| panic!("Conversion error: {}", err));
+
+        let base_addr = <i32>::try_from($stack.pop().expect("Stack underflow when popping store address"))
+            .unwrap_or_else(|err| panic!("Expected i32 memory address: {}", err)) as usize;
+        let effective_addr = base_addr + $offset as usize;
+        if effective_addr + $num_bytes > $memory.len() {
+            panic!("Memory store out of bounds");
+        }
+
+        let bytes = val.to_le_bytes();
+        $memory[effective_addr..effective_addr + $num_bytes].copy_from_slice(&bytes[..$num_bytes]);
     };
 }
-
-macro_rules! define_partial_load_fn {
-    ($fn_name:ident, $ret_type:ty, $inner_type:ty, $num_bytes:expr, $extend:expr) => {
-        paste! {
-            #[inline(always)]
-            pub fn [<$fn_name>](
-                mem: &[u8],
-                addr: usize
-            ) -> Result<$ret_type, WasmMemoryError>
-            {
-                if addr + $num_bytes > mem.len() {
-                    return Err(WasmMemoryError(
-                        concat!(stringify!($fn_name), " out of bounds").to_string()
-                    ));
-                }
-                let mut buf = [0u8; $num_bytes];
-                buf.copy_from_slice(&mem[addr..addr + $num_bytes]);
-
-                Ok(($extend)(<$inner_type>::from_le_bytes(buf)) as $ret_type)
-            }
-        }
-    };
-}
-
-macro_rules! define_store_fn {
-    ($name:ident, $type:ty, $num_bytes:expr) => {
-        paste! {
-            #[inline(always)]
-            pub fn [<$name _store>](
-                mem: &mut [u8],
-                addr: usize,
-                value: $type
-            ) -> Result<(), WasmMemoryError> {
-                if addr + $num_bytes > mem.len() {
-                    return Err(WasmMemoryError(
-                        concat!(stringify!($name), ".store out of bounds").to_string()
-                    ));
-                }
-                let bytes = value.to_le_bytes();
-                mem[addr..addr + $num_bytes].copy_from_slice(&bytes);
-                Ok(())
-            }
-        }
-    };
-}
-
-macro_rules! define_partial_store_fn {
-    ($fn_name:ident, $type:ty, $num_bytes:expr) => {
-        paste! {
-            #[inline(always)]
-            pub fn [<$fn_name>](
-                mem: &mut [u8],
-                addr: usize,
-                value: $type
-            ) -> Result<(), WasmMemoryError> {
-                if addr + $num_bytes > mem.len() {
-                    return Err(WasmMemoryError(
-                        concat!(stringify!($fn_name), " out of bounds").to_string()
-                    ));
-                }
-                let full_bytes = value.to_le_bytes();
-                mem[addr..addr + $num_bytes]
-                    .copy_from_slice(&full_bytes[..$num_bytes]);
-                Ok(())
-            }
-        }
-    };
-}
-
-define_load_fn!(i32, i32, 4);
-define_load_fn!(i64, i64, 8);
-define_load_fn!(f32, f32, 4);
-define_load_fn!(f64, f64, 8);
-define_store_fn!(i32, i32, 4);
-define_store_fn!(i64, i64, 8);
-define_store_fn!(f32, f32, 4);
-define_store_fn!(f64, f64, 8);
-define_partial_load_fn!(i32_load8_s, i32, i8, 1, |v: i8| v as i32);
-define_partial_load_fn!(i32_load8_u, i32, u8, 1, |v: u8| v as i32);
-define_partial_load_fn!(i32_load16_s, i32, i16, 2, |v: i16| v as i32);
-define_partial_load_fn!(i32_load16_u, i32, u16, 2, |v: u16| v as i32);
-define_partial_load_fn!(i64_load8_s, i64, i8, 1, |v: i8| v as i64);
-define_partial_load_fn!(i64_load8_u, i64, u8, 1, |v: u8| v as i64);
-define_partial_load_fn!(i64_load16_s, i64, i16, 2, |v: i16| v as i64);
-define_partial_load_fn!(i64_load16_u, i64, u16, 2, |v: u16| v as i64);
-define_partial_load_fn!(i64_load32_s, i64, i32, 4, |v: i32| v as i64);
-define_partial_load_fn!(i64_load32_u, i64, u32, 4, |v: u32| v as i64);
-define_partial_store_fn!(i32_store8, i32, 1);
-define_partial_store_fn!(i32_store16, i32, 2);
-define_partial_store_fn!(i64_store8, i64, 1);
-define_partial_store_fn!(i64_store16, i64, 2);
-define_partial_store_fn!(i64_store32, i64, 4);
 
 #[inline(always)]
 pub fn read_offset(iter: &mut &[u8]) -> u32 {

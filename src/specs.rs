@@ -209,7 +209,7 @@ pub mod opcodes {
     );
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WasmValue {
     I32(i32),
     I64(i64),
@@ -217,78 +217,66 @@ pub enum WasmValue {
     F64(f64),
 }
 
-#[allow(dead_code)]
-impl WasmValue {
-    #[inline(always)]
-    pub fn from_i32(value: i32) -> Self {
-        WasmValue::I32(value)
-    }
-    #[inline(always)]
-    pub fn from_i64(value: i64) -> Self {
-        WasmValue::I64(value)
-    }
-    #[inline(always)]
-    pub fn from_f32(value: f32) -> Self {
-        WasmValue::F32(value)
-    }
-    #[inline(always)]
-    pub fn from_f64(value: f64) -> Self {
-        WasmValue::F64(value)
-    }
-    #[inline(always)]
-    pub fn as_type<T>(&self, f: fn(WasmValue) -> Option<T>) -> Option<T> {
-        f(*self)
-    }
-    #[inline(always)]
-    pub fn as_i32(&self) -> Option<i32> {
-        self.as_type(|v| if let WasmValue::I32(val) = v { Some(val) } else { None })
-    }
-    #[inline(always)]
-    pub fn as_i64(&self) -> Option<i64> {
-        self.as_type(|v| if let WasmValue::I64(val) = v { Some(val) } else { None })
-    }
-    #[inline(always)]
-    pub fn as_f32(&self) -> Option<f32> {
-        self.as_type(|v| if let WasmValue::F32(val) = v { Some(val) } else { None })
-    }
-    #[inline(always)]
-    pub fn as_f64(&self) -> Option<f64> {
-        self.as_type(|v| if let WasmValue::F64(val) = v { Some(val) } else { None })
-    }
+macro_rules! wasm_value_conversions {
+    ($($variant:ident, $ty:ty),*) => {
+        $(
+            impl From<$ty> for WasmValue {
+                #[inline(always)]
+                fn from(value: $ty) -> Self {
+                    WasmValue::$variant(value)
+                }
+            }
+
+            impl TryFrom<WasmValue> for $ty {
+                type Error = String;
+                #[inline(always)]
+                fn try_from(value: WasmValue) -> Result<Self, Self::Error> {
+                    if let WasmValue::$variant(val) = value {
+                        Ok(val)
+                    } else {
+                        Err(format!("Cannot convert from from {} to {}", stringify!($variant), stringify!($ty)))
+                    }
+                }
+            }
+        )*
+    };
 }
+
+wasm_value_conversions!(
+    I32, i32,
+    I64, i64,
+    F32, f32,
+    F64, f64
+);
 
 #[macro_export]
 macro_rules! binary_fn {
-    ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {
-        paste::paste! {
-            let val1 = $stack.pop().expect("Stack underflow").[<as_ $in_type>]()
-                .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
-            let top = $stack.last_mut().expect("Stack underflow");
-            let val2 = top.[<as_ $in_type>]()
-                .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
-            *top = WasmValue::[<$out_type:upper>]($func(val2, val1));
-        }
+    ($stack:expr, $in_type:ty, $out_type:ty, $func:expr) => {
+        let val1 = <$in_type>::try_from($stack.pop().expect("Stack underflow"))
+            .unwrap_or_else(|err| panic!("Conversion error: {}", err));
+        let top = $stack.last_mut().expect("Stack underflow");
+        let val2 = <$in_type>::try_from(*top)
+            .unwrap_or_else(|err| panic!("Conversion error: {}", err));
+        *top = <$out_type>::from($func(val2, val1)).into();
     };
 }
 
 #[macro_export]
 macro_rules! unary_fn {
-    ($stack:expr, $in_type:ident, $out_type:ident, $func:expr) => {
-        paste::paste! {
-            let top = $stack.last_mut().expect("Stack underflow");
-            let val = top.[<as_ $in_type>]()
-                .expect(concat!("Wrong type (expected ", stringify!($in_type), ")"));
-            *top = WasmValue::[<$out_type:upper>]($func(val));
-        }
+    ($stack:expr, $in_type:ty, $out_type:ty, $func:expr) => {
+        let top = $stack.last_mut().expect("Stack underflow");
+        let val = <$in_type>::try_from(*top)
+            .unwrap_or_else(|err| panic!("Conversion error: {}", err));
+        *top = <$out_type>::from($func(val)).into();
     };
 }
 
 #[macro_export]
 macro_rules! trunc {
-    ($stack:expr, $in_type:ident, $out_type:ident, $min:expr, $max:expr, $convert:expr) => {
+    ($stack:expr, $in_type:ty, $out_type:ty, $min:expr, $max:expr, $convert:expr) => {
         unary_fn!($stack, $in_type, $out_type, |a: $in_type| -> $out_type {
             if a.is_nan() || a.is_infinite() || a < $min || a > $max {
-                panic!("Trap due to trunc from {} to {}", a, a as $out_type);
+                panic!("Invalid trunc from {} to {}", stringify!($in_type), stringify!($out_type));
             }
             $convert(a)
         });
