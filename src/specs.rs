@@ -282,3 +282,28 @@ macro_rules! trunc {
         });
     };
 }
+
+#[macro_export]
+macro_rules! branch_to_target {
+    ($depth:expr, $controls:expr, $operands:expr, $iter:expr) => {
+        let target_index = $controls.len().checked_sub($depth as usize + 1)
+            .expect("Invalid branch depth");
+
+        let target_frame = &$controls[target_index];
+        let required_label_types = target_frame.label_types.len();
+        if $operands.len() < required_label_types {
+            panic!("Insufficient operands for branch target");
+        }
+        
+        $operands.truncate(target_frame.height + required_label_types);
+        $controls.truncate(target_index);
+
+        while !$iter.is_empty() {
+            if let Some(Opcode::END) = Opcode::from_byte($iter[0]) {
+                *$iter = &$iter[1..];
+                break;
+            }
+            *$iter = &$iter[1..];
+        }
+    };
+}
