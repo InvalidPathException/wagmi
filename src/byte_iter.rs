@@ -8,6 +8,7 @@ pub struct ByteIter<'a> {
 }
 
 impl<'a> ByteIter<'a> {
+    #[inline]
     pub fn new(bytes: &'a [u8], idx: usize) -> Self { Self { bytes, idx } }
     #[inline]
     pub fn empty(&self) -> bool { self.idx >= self.bytes.len() }
@@ -34,6 +35,7 @@ impl<'a> ByteIter<'a> {
         if self.idx >= self.bytes.len() { return Err(Error::Malformed(error_msg::UNEXPECTED_END)); }
         Ok(self.bytes[self.idx])
     }
+    #[inline]
     pub fn slice_from(&self, start: usize, len: usize) -> Result<&'a [u8], Error> {
         let end = start.checked_add(len).ok_or_else(|| Error::Malformed(error_msg::UNEXPECTED_END_SHORT))?;
         if end > self.bytes.len() { return Err(Error::Malformed(error_msg::UNEXPECTED_END_SHORT)); }

@@ -4,6 +4,7 @@ mod spec;
 mod leb128;
 mod byte_iter;
 mod error_msg;
+mod module;
 
 // Debug macro that only prints when wasm_debug feature is enabled
 #[cfg(feature = "wasm_debug")]
