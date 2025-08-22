@@ -1,14 +1,15 @@
 #![allow(clippy::needless_return)]
 use std::fmt::{Display, Formatter};
 use crate::leb128::*;
+use crate::error_msg;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
-    Malformed(String),
-    Validation(String),
-    Trap(String),
-    Link(String),
-    Uninstantiable(String),
+    Malformed(&'static str),
+    Validation(&'static str),
+    Trap(&'static str),
+    Link(&'static str),
+    Uninstantiable(&'static str),
 }
 
 impl Display for Error {
@@ -26,15 +27,15 @@ impl Display for Error {
 impl std::error::Error for Error {}
 
 #[inline(always)]
-pub fn malformed<T>(msg: &str) -> Result<T, Error> { Err(Error::Malformed(msg.to_string())) }
+pub fn malformed<T>(msg: &'static str) -> Result<T, Error> { Err(Error::Malformed(msg)) }
 #[inline(always)]
-pub fn validation<T>(msg: &str) -> Result<T, Error> { Err(Error::Validation(msg.to_string())) }
+pub fn validation<T>(msg: &'static str) -> Result<T, Error> { Err(Error::Validation(msg)) }
 #[inline(always)]
-pub fn trap<T>(msg: &str) -> Result<T, Error> { Err(Error::Trap(msg.to_string())) }
+pub fn trap<T>(msg: &'static str) -> Result<T, Error> { Err(Error::Trap(msg)) }
 #[inline(always)]
-pub fn link<T>(msg: &str) -> Result<T, Error> { Err(Error::Link(msg.to_string())) }
+pub fn link<T>(msg: &'static str) -> Result<T, Error> { Err(Error::Link(msg)) }
 #[inline(always)]
-pub fn uninstantiable<T>(msg: &str) -> Result<T, Error> { Err(Error::Uninstantiable(msg.to_string())) }
+pub fn uninstantiable<T>(msg: &'static str) -> Result<T, Error> { Err(Error::Uninstantiable(msg)) }
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -80,7 +81,7 @@ impl Signature {
                 _ => None,
             }
         }
-        if *idx >= bytes.len() { return malformed("unexpected end of section or function"); }
+        if *idx >= bytes.len() { return malformed(error_msg::UNEXPECTED_END); }
         let byte = bytes[*idx];
         return if byte == EMPTY_TYPE || is_val_type(byte) {
             *idx += 1;
@@ -88,7 +89,7 @@ impl Signature {
         } else {
             let n: i64 = safe_read_sleb128(bytes, idx, 33)?;
             if n < 0 || (n as usize) >= types.len() {
-                return malformed("invalid value type");
+                return malformed(error_msg::INVALID_VALUE_TYPE);
             }
             Ok(types[n as usize].clone())
         }

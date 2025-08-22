@@ -1,9 +1,9 @@
 #![deny(unsafe_code)]
 
-pub mod spec;
+mod spec;
 mod leb128;
-
-pub use leb128::*;
+mod byte_iter;
+mod error_msg;
 
 // Debug macro that only prints when wasm_debug feature is enabled
 #[cfg(feature = "wasm_debug")]
