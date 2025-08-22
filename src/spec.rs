@@ -51,6 +51,19 @@ pub enum ValType {
 #[inline(always)]
 pub fn is_val_type(byte: u8) -> bool { matches!(byte, 0x7f | 0x7e | 0x7d | 0x7c) }
 
+#[inline]
+pub fn valtype_from_byte(byte: u8) -> Option<ValType> {
+    match byte {
+        0x7f => Some(ValType::I32),
+        0x7e => Some(ValType::I64),
+        0x7d => Some(ValType::F32),
+        0x7c => Some(ValType::F64),
+        0x00 => Some(ValType::Null),
+        0xff => Some(ValType::Any),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signature {
     pub params: Vec<ValType>,
