@@ -109,14 +109,14 @@ impl Signature {
     }
 }
 
-#[repr(u8)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum Mut {
-    Const = 0x0,
-    Var = 0x1,
+#[inline(always)]
+pub fn mutability_from_byte(byte: u8) -> Option<bool> {
+    match byte {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
+    }
 }
 
-#[inline(always)]
-pub fn is_mut_byte(byte: u8) -> bool { matches!(byte, 0x0 | 0x1) }
 #[inline(always)]
 pub fn is_valid_utf8(bytes: &[u8]) -> bool { std::str::from_utf8(bytes).is_ok() }
