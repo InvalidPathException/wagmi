@@ -52,7 +52,6 @@ pub struct Table {
 pub struct Memory { 
     pub min: u32, 
     pub max: u32, 
-    pub exists: bool, 
     pub import: Option<ImportRef>
 }
 
@@ -81,8 +80,8 @@ pub struct Module {
     pub bytes: Rc<Vec<u8>>,
     pub types: Vec<Signature>,
     pub imports: HashMap<String, HashMap<String, ExternKind>>,
-    pub tables: Vec<Table>,
-    pub memory: Memory,
+    pub table: Option<Table>,
+    pub memory: Option<Memory>,
     pub globals: Vec<Global>,
     pub exports: HashMap<String, Export>,
     pub start: u32,
@@ -108,8 +107,8 @@ impl Module {
             bytes: Rc::new(bytes),
             types: Vec::new(),
             imports: HashMap::new(),
-            tables: Vec::new(),
-            memory: Memory { min: 0, max: 0, exists: false, import: None },
+            table: None,
+            memory: None,
             globals: Vec::new(),
             exports: HashMap::new(),
             start: u32::MAX,
@@ -158,7 +157,6 @@ impl Module {
         Ok(())
     }
 
-    // TODO: section parsing
     fn parse_type_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
         let n_types: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
         self.types.reserve_exact(n_types as usize);
@@ -256,7 +254,7 @@ impl Module {
                     });
                 }
                 ExternKind::Table => {
-                    if !self.tables.is_empty() {
+                    if self.table.is_some() {
                         return Err(Error::Validation(MULTIPLE_TABLES));
                     }
                     // Only 0x70 in 1.0 MVP
@@ -265,14 +263,14 @@ impl Module {
                         return Err(Error::Malformed(MALFORMED_REFERENCE_TYPE));
                     }
                     let (min, max) = get_table_limits(bytes, it)?;
-                    self.tables.push(Table { min, max, ty: ValType::F64, import });
+                    self.table = Some(Table { min, max, ty: ValType::F64, import });
                 }
                 ExternKind::Mem => {
-                    if self.memory.exists {
+                    if self.memory.is_some() {
                         return Err(Error::Validation(MULTIPLE_MEMORIES));
                     }
                     let (min, max) = get_memory_limits(bytes, it)?;
-                    self.memory = Memory { min, max, exists: true, import };
+                    self.memory = Some(Memory { min, max, import });
                 }
                 ExternKind::Global => {
                     let ty: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
@@ -295,41 +293,140 @@ impl Module {
     }
 
     fn parse_function_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
+        let n_functions: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+        self.functions.reserve(n_functions as usize);
+
+        for _ in 0..n_functions {
+            assert_not_empty!(it);
+            let type_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+            if (type_idx as usize) >= self.types.len() {
+                return Err(Error::Validation(UNKNOWN_TYPE));
+            }
+            self.functions.push(Function {
+                body: 0..0,
+                ty: self.types[type_idx as usize].clone(),
+                locals: vec![],
+                import: None,
+                is_declared: false
+            });
+        }
         Ok(())
     }
 
     fn parse_table_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
+        let n_tables: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+        if n_tables > 1 || (n_tables == 1 && self.table.is_some()) {
+            return Err(Error::Validation(MULTIPLE_TABLES));
+        }
+
+        if n_tables == 1 {
+            assert_not_empty!(it);
+            let elem_type = it.read_u8()?;
+            if elem_type != 0x70 {
+                return Err(Error::Validation(INVALID_TABLE_ELEM_TYPE));
+            }
+            let (min, max) = get_table_limits(bytes, it)?;
+            self.table = Some(Table { min, max, ty: ValType::F64, import: None });
+        }
         Ok(())
     }
 
     fn parse_memory_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
+        let n_memories: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+        if n_memories > 1 || (n_memories == 1 && self.memory.is_some()) {
+            return Err(Error::Validation(MULTIPLE_MEMORIES));
+        }
+
+        if n_memories == 1 {
+            assert_not_empty!(it);
+            let (min, max) = get_memory_limits(bytes, it)?;
+            self.memory = Some(Memory { min, max, import: None });
+        }
         Ok(())
     }
 
     fn parse_global_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
+        let n_globals: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+
+        for _ in 0..n_globals {
+            assert_not_empty!(it);
+            let ty = it.read_u8()?;
+            if !is_val_type(ty) {
+                return Err(Error::Malformed(INVALID_GLOBAL_TYPE));
+            }
+            let mut_byte = it.read_u8()?;
+            let is_mutable = mutability_from_byte(mut_byte)
+                .ok_or(Error::Malformed(INVALID_MUTABILITY))?;
+            let initializer_offset = it.cur();
+            self.globals.push(Global {
+                ty: valtype_from_byte(ty).unwrap(),
+                is_mutable,
+                initializer_offset,
+                import: None
+            });
+            Self::validate_const(bytes, it, valtype_from_byte(ty).unwrap(), &self.globals)?;
+        }
         Ok(())
     }
 
+    // TODO: section parsing
     fn parse_export_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
         Ok(())
     }
 
     fn parse_start_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
+        let start: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+        if (start as usize) >= self.functions.len() {
+            return Err(Error::Validation(UNKNOWN_FUNC));
+        }
+        self.start = start;
         Ok(())
     }
 
+    // TODO: section parsing
     fn parse_element_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
         Ok(())
     }
 
+    // TODO: section parsing
     fn parse_code_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
         Ok(())
     }
 
     fn parse_data_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
+        let n_data_segments: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+
+        for _ in 0..n_data_segments {
+            assert_not_empty!(it);
+            let segment_flag: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+            if segment_flag != 0 {
+                return Err(Error::Validation(INVALID_DATA_SEGMENT_FLAG));
+            }
+            if !self.memory.is_some() {
+                return Err(Error::Validation(UNKNOWN_MEMORY));
+            }
+
+            let initializer_offset = it.cur();
+            Self::validate_const(bytes, it, ValType::I32, &self.globals)?;
+
+            let data_length: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+            if !it.has_n_left(data_length as usize) {
+                return Err(Error::Malformed(UNEXPECTED_END));
+            }
+
+            let data_start = it.cur();
+            it.advance(data_length as usize);
+            let data_end = it.cur();
+
+            self.data_segments.push(DataSegment {
+                data_range: data_start..data_end,
+                initializer_offset
+            });
+        }
         Ok(())
     }
 
+    // TODO: validation for const
     fn validate_const(bytes: &[u8], it: &mut ByteIter, expected: ValType, globals: &Vec<Global>) -> Result<(), Error> {
         Ok(())
     }
