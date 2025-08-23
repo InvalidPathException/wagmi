@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::spec::{Error, Signature, ValType, MAGIC_HEADER};
-use crate::byte_iter::ByteIter;
-use crate::leb128::safe_read_leb128;
+use crate::byte_iter::*;
 use crate::error_msg::*;
+use crate::leb128::*;
+use crate::spec::*;
 
 // ---------------- Import/Export related ----------------
 #[derive(Clone, Debug)]
@@ -95,6 +95,10 @@ pub struct Module {
     pub block_ends: HashMap<usize, usize>,
 }
 
+macro_rules! assert_not_empty {
+    ($it:expr) => { if $it.empty() { return Err(Error::Malformed(UNEXPECTED_END)); } };
+}
+
 impl Module {
     pub const MAX_PAGES: u32 = 65536;
     pub const MAX_LOCALS: usize = 50000;
@@ -156,10 +160,137 @@ impl Module {
 
     // TODO: section parsing
     fn parse_type_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
+        let n_types: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+        self.types.reserve_exact(n_types as usize);
+
+        for i in 0..n_types as usize {
+            assert_not_empty!(it);
+            let byte = it.read_u8()?;
+            if byte != 0x60 {
+                return Err(Error::Malformed(INT_TOO_LONG));
+            }
+
+            let n_params: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+            let mut sig = Signature::default();
+            sig.params.reserve_exact(n_params as usize);
+
+            for _ in 0..n_params {
+                let ty = it.read_u8()?;
+                if !is_val_type(ty) {
+                    return Err(Error::Malformed(INVALID_VALUE_TYPE));
+                }
+                sig.params.push(valtype_from_byte(ty).unwrap());
+            }
+
+            let n_results: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+            if n_results > 1 {
+                return Err(Error::Malformed(INVALID_RESULT_ARITY));
+            }
+            if n_results == 1 {
+                let ty = it.read_u8()?;
+                if !is_val_type(ty) {
+                    return Err(Error::Malformed(INVALID_RESULT_TYPE));
+                }
+                sig.result = valtype_from_byte(ty).unwrap();
+                sig.result_count = 1;
+            }
+
+            self.types.push(sig);
+        }
+
         Ok(())
     }
 
     fn parse_import_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
+        let n_imports: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+
+        for _ in 0..n_imports {
+            assert_not_empty!(it);
+
+            // Module name
+            let module_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+            let module_start = it.idx;
+            if module_start + module_len as usize > bytes.len() {
+                return Err(Error::Malformed(UNEXPECTED_END));
+            }
+            if !is_valid_utf8(&bytes[module_start..module_start + module_len as usize]) {
+                return Err(Error::Malformed(INVALID_UTF8));
+            }
+            let module_name = String::from_utf8(bytes[module_start..module_start + module_len as usize].to_vec()).unwrap();
+            it.idx = module_start + module_len as usize;
+
+            // Field name
+            let field_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+            let field_start = it.idx;
+            if field_start + field_len as usize > bytes.len() {
+                return Err(Error::Malformed(UNEXPECTED_END));
+            }
+            if !is_valid_utf8(&bytes[field_start..field_start + field_len as usize]) {
+                return Err(Error::Malformed(INVALID_UTF8));
+            }
+            let field_name = String::from_utf8(bytes[field_start..field_start + field_len as usize].to_vec()).unwrap();
+            it.idx = field_start + field_len as usize;
+
+            let byte = it.read_u8()?;
+            let kind = ExternKind::from_byte(byte)
+                .ok_or(Error::Malformed(MALFORMED_IMPORT_KIND))?;
+
+            self.imports.entry(module_name.clone()).or_default().insert(field_name.clone(), kind);
+            let import = Some(ImportRef {
+                module: module_name.clone(),
+                field: field_name.clone()
+            });
+
+            match kind {
+                ExternKind::Func => {
+                    let type_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+                    if (type_idx as usize) >= self.types.len() {
+                        return Err(Error::Validation(UNKNOWN_TYPE));
+                    }
+                    self.functions.push(Function {
+                        body: 0..0,
+                        ty: self.types[type_idx as usize].clone(),
+                        locals: vec![],
+                        import,
+                        is_declared: false
+                    });
+                }
+                ExternKind::Table => {
+                    if !self.tables.is_empty() {
+                        return Err(Error::Validation(MULTIPLE_TABLES));
+                    }
+                    // Only 0x70 in 1.0 MVP
+                    let reftype: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+                    if reftype != 0x70 {
+                        return Err(Error::Malformed(MALFORMED_REFERENCE_TYPE));
+                    }
+                    let (min, max) = get_table_limits(bytes, it)?;
+                    self.tables.push(Table { min, max, ty: ValType::F64, import });
+                }
+                ExternKind::Mem => {
+                    if self.memory.exists {
+                        return Err(Error::Validation(MULTIPLE_MEMORIES));
+                    }
+                    let (min, max) = get_memory_limits(bytes, it)?;
+                    self.memory = Memory { min, max, exists: true, import };
+                }
+                ExternKind::Global => {
+                    let ty: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+                    if !is_val_type(ty as u8) {
+                        return Err(Error::Malformed(INVALID_GLOBAL_TYPE));
+                    }
+                    let mut_byte = it.read_u8()?;
+                    let is_mutable = mutability_from_byte(mut_byte)
+                        .ok_or(Error::Malformed(INVALID_MUTABILITY))?;
+                    self.globals.push(Global {
+                        ty: valtype_from_byte(ty as u8).unwrap(),
+                        is_mutable,
+                        initializer_offset: 0,
+                        import
+                    });
+                }
+            }
+        }
         Ok(())
     }
 
@@ -229,4 +360,29 @@ where
     }
     ignore_custom_section(bytes, it)?;
     Ok(())
+}
+
+fn get_limits(bytes: &[u8], it: &mut ByteIter, upper: u32) -> Result<(u32, u32), Error> {
+    let flags: u32 = safe_read_leb128(bytes, &mut it.idx, 1)?;
+    let initial: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+    let max = if flags == 1 {
+        safe_read_leb128::<u32>(bytes, &mut it.idx, 32)?
+    } else {
+        upper
+    };
+
+    if max < initial { return Err(Error::Validation(SIZE_MIN_GREATER_THAN_MAX)); }
+    Ok((initial, max))
+}
+
+fn get_memory_limits(bytes: &[u8], it: &mut ByteIter) -> Result<(u32, u32), Error> {
+    let (initial, max) = get_limits(bytes, it, Module::MAX_PAGES)?;
+    if initial > Module::MAX_PAGES || max > Module::MAX_PAGES {
+        return Err(Error::Validation(MEMORY_SIZE_LIMIT));
+    }
+    Ok((initial, max))
+}
+
+fn get_table_limits(bytes: &[u8], it: &mut ByteIter) -> Result<(u32, u32), Error> {
+    get_limits(bytes, it, u32::MAX)
 }
