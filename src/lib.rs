@@ -1,10 +1,10 @@
 #![deny(unsafe_code)]
-
 pub mod module;
-mod spec;
+pub mod spec;
 mod leb128;
 mod byte_iter;
 mod error_msg;
+mod validator;
 
 pub use spec::{Error, ValType, Signature};
 pub use module::Module;

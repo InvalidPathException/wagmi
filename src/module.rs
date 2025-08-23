@@ -5,6 +5,7 @@ use crate::byte_iter::*;
 use crate::error_msg::*;
 use crate::leb128::*;
 use crate::spec::*;
+use crate::validator::Validator;
 
 // ---------------- Import/Export related ----------------
 #[derive(Clone, Debug)]
@@ -369,8 +370,59 @@ impl Module {
         Ok(())
     }
 
-    // TODO: section parsing
     fn parse_export_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
+        let n_exports: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+
+        for _ in 0..n_exports {
+            assert_not_empty!(it);
+
+            let name_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+            let name_start = it.idx;
+            if name_start + name_len as usize > bytes.len() {
+                return Err(Error::Malformed(UNEXPECTED_END));
+            }
+            let name = String::from_utf8(bytes[name_start..name_start + name_len as usize].to_vec()).unwrap();
+            it.idx = name_start + name_len as usize;
+
+            let byte = it.read_u8()?;
+            let kind = ExternKind::from_byte(byte)
+                .ok_or(Error::Validation(INVALID_EXPORT_DESC))?;
+
+            let export_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+
+            if self.exports.contains_key(&name) {
+                return Err(Error::Validation(DUPLICATE_EXPORT_NAME));
+            }
+
+            match kind {
+                ExternKind::Func => {
+                    if (export_idx as usize) >= self.functions.len() {
+                        return Err(Error::Validation(UNKNOWN_FUNC));
+                    }
+                    self.functions[export_idx as usize].is_declared = true;
+                }
+                ExternKind::Table => {
+                    if export_idx != 0 {
+                        return Err(Error::Validation(UNKNOWN_TABLE));
+                    }
+                }
+                ExternKind::Mem => {
+                    if export_idx != 0 || self.memory.is_some() {
+                        return Err(Error::Validation(UNKNOWN_MEMORY));
+                    }
+                }
+                ExternKind::Global => {
+                    if (export_idx as usize) >= self.globals.len() {
+                        return Err(Error::Validation(UNKNOWN_GLOBAL));
+                    }
+                }
+            }
+
+            self.exports.insert(name, Export {
+                kind,
+                idx: export_idx
+            });
+        }
         Ok(())
     }
 
@@ -388,8 +440,61 @@ impl Module {
         Ok(())
     }
 
-    // TODO: section parsing
     fn parse_code_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
+        let n_functions: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+        let n_imports = self.functions.iter().filter(|f| f.import.is_some()).count() as u32;
+        if (n_functions + n_imports) as usize != self.functions.len() {
+            return Err(Error::Malformed(FUNC_CODE_INCONSISTENT));
+        }
+
+        for i in 0..self.functions.len() {
+            if self.functions[i].import.is_some() {
+                continue;
+            }
+
+            // Initialize locals with params
+            {
+                let function = &mut self.functions[i];
+                self.functions[i].locals = function.ty.params.clone();
+            }
+
+            let function_length: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+            let func_start = it.cur();
+
+            // Parse local declarations
+            let mut n_local_decls: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+            while n_local_decls > 0 {
+                n_local_decls -= 1;
+                let n_locals: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+                let ty = it.read_u8()?;
+                if !is_val_type(ty) {
+                    return Err(Error::Validation(INVALID_LOCAL_TYPE));
+                }
+                for _ in 0..n_locals {
+                    let vt = valtype_from_byte(ty).unwrap();
+                    let function = &mut self.functions[i];
+                    function.locals.push(vt);
+                    if function.locals.len() > Module::MAX_LOCALS {
+                        return Err(Error::Malformed(TOO_MANY_LOCALS));
+                    }
+                }
+            }
+
+            let body_start = it.cur();
+            let body_length = function_length as usize - (body_start - func_start);
+            let body_end_expected = body_start + body_length;
+
+            {
+                let function = &mut self.functions[i];
+                function.body = body_start..body_end_expected;
+            }
+
+            // Validate function body immediately
+            // TODO: check if this can be a member
+            Validator::new(self).validate_function(i)?;
+            // Advance outer iterator to end of validated body
+            it.advance(body_length);
+        }
         Ok(())
     }
 
@@ -402,7 +507,7 @@ impl Module {
             if segment_flag != 0 {
                 return Err(Error::Validation(INVALID_DATA_SEGMENT_FLAG));
             }
-            if !self.memory.is_some() {
+            if self.memory.is_none() {
                 return Err(Error::Validation(UNKNOWN_MEMORY));
             }
 

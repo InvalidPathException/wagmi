@@ -42,7 +42,7 @@ where T: TryFrom<u64> {
     if consumed > (bits as usize + 6) / 7 { return malformed(INT_TOO_LONG); }
 
     // Only bits=1 and bits=32 are used
-    if (bits == 1 && result > 1 ) || (bits == 32 && result > 0xFFFFFFFF) { return malformed(INT_TOO_LARGE); }
+    if (bits == 1 && result > 1) || (bits == 32 && result > 0xFFFFFFFF) { return malformed(INT_TOO_LARGE); }
 
     if consumed > 1 {
         let used = (consumed - 1) * 7;
