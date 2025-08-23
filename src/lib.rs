@@ -1,10 +1,13 @@
 #![deny(unsafe_code)]
 
+pub mod module;
 mod spec;
 mod leb128;
 mod byte_iter;
 mod error_msg;
-mod module;
+
+pub use spec::{Error, ValType, Signature};
+pub use module::Module;
 
 // Debug macro that only prints when wasm_debug feature is enabled
 #[cfg(feature = "wasm_debug")]

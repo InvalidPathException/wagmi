@@ -3,6 +3,8 @@ use std::fmt::{Display, Formatter};
 use crate::leb128::*;
 use crate::error_msg;
 
+pub const MAGIC_HEADER: &[u8; 4] = b"\0asm";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     Malformed(&'static str),
