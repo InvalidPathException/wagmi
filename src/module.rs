@@ -65,7 +65,7 @@ pub struct Global {
 }
 
 #[derive(Clone)]
-pub struct Export { pub desc: ExternKind, pub idx: u32 }
+pub struct Export { pub kind: ExternKind, pub idx: u32 }
 
 #[derive(Clone)]
 pub struct Element { pub ty: ValType }
@@ -138,30 +138,17 @@ impl Module {
         }
         it.advance(4);
 
-        // Skip custom sections and parse standard sections
-        skip_custom_section(bytes, &mut it)?;
-        section(&mut it, bytes, 1, |it: &mut ByteIter| { self.parse_type_section(bytes, it) }, None::<fn()>)?;
-        skip_custom_section(bytes, &mut it)?;
-        section(&mut it, bytes, 2, |it: &mut ByteIter| { self.parse_import_section(bytes, it) }, None::<fn()>)?;
-        skip_custom_section(bytes, &mut it)?;
-        section(&mut it, bytes, 3, |it: &mut ByteIter| { self.parse_function_section(bytes, it) }, None::<fn()>)?;
-        skip_custom_section(bytes, &mut it)?;
-        section(&mut it, bytes, 4, |it: &mut ByteIter| { self.parse_table_section(bytes, it) }, None::<fn()>)?;
-        skip_custom_section(bytes, &mut it)?;
-        section(&mut it, bytes, 5, |it: &mut ByteIter| { self.parse_memory_section(bytes, it) }, None::<fn()>)?;
-        skip_custom_section(bytes, &mut it)?;
-        section(&mut it, bytes, 6, |it: &mut ByteIter| { self.parse_global_section(bytes, it) }, None::<fn()>)?;
-        skip_custom_section(bytes, &mut it)?;
-        section(&mut it, bytes, 7, |it: &mut ByteIter| { self.parse_export_section(bytes, it) }, None::<fn()>)?;
-        skip_custom_section(bytes, &mut it)?;
-        section(&mut it, bytes, 8, |it: &mut ByteIter| { self.parse_start_section(bytes, it) }, None::<fn()>)?;
-        skip_custom_section(bytes, &mut it)?;
-        section(&mut it, bytes, 9, |it: &mut ByteIter| { self.parse_element_section(bytes, it) }, None::<fn()>)?;
-        skip_custom_section(bytes, &mut it)?;
-        section(&mut it, bytes, 10, |it: &mut ByteIter| { self.parse_code_section(bytes, it) }, None::<fn()>)?;
-        skip_custom_section(bytes, &mut it)?;
-        section(&mut it, bytes, 11, |it: &mut ByteIter| { self.parse_data_section(bytes, it) }, None::<fn()>)?;
-        skip_custom_section(bytes, &mut it)?;
+        section(&mut it, bytes, 1, |it: &mut ByteIter| { self.parse_type_section(bytes, it) })?;
+        section(&mut it, bytes, 2, |it: &mut ByteIter| { self.parse_import_section(bytes, it) })?;
+        section(&mut it, bytes, 3, |it: &mut ByteIter| { self.parse_function_section(bytes, it) })?;
+        section(&mut it, bytes, 4, |it: &mut ByteIter| { self.parse_table_section(bytes, it) })?;
+        section(&mut it, bytes, 5, |it: &mut ByteIter| { self.parse_memory_section(bytes, it) })?;
+        section(&mut it, bytes, 6, |it: &mut ByteIter| { self.parse_global_section(bytes, it) })?;
+        section(&mut it, bytes, 7, |it: &mut ByteIter| { self.parse_export_section(bytes, it) })?;
+        section(&mut it, bytes, 8, |it: &mut ByteIter| { self.parse_start_section(bytes, it) })?;
+        section(&mut it, bytes, 9, |it: &mut ByteIter| { self.parse_element_section(bytes, it) })?;
+        section(&mut it, bytes, 10, |it: &mut ByteIter| { self.parse_code_section(bytes, it) })?;
+        section(&mut it, bytes, 11, |it: &mut ByteIter| { self.parse_data_section(bytes, it) })?;
         
         if !it.empty() { return Err(Error::Malformed(JUNK_AFTER_LAST_SECTION)); }
         Ok(())
@@ -218,14 +205,13 @@ impl Module {
 }
 
 // ---------------- Helper Functions ----------------
-fn skip_custom_section(bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
+fn ignore_custom_section(bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
     Ok(())
 }
 
-fn section<F, E>(it: &mut ByteIter, bytes: &[u8], id: u8, mut body: F, mut else_fn: Option<E>) -> Result<(), Error>
+fn section<F>(it: &mut ByteIter, bytes: &[u8], id: u8, mut reader: F) -> Result<(), Error>
 where
-    F: FnMut(&mut ByteIter) -> Result<(), Error>,
-    E: FnMut(),
+    F: FnMut(&mut ByteIter) -> Result<(), Error>
 {
     if !it.empty() && it.peek_u8()? == id {
         it.advance(1);
@@ -234,17 +220,13 @@ where
         if section_start + section_length as usize > bytes.len() { 
             return Err(Error::Malformed(UNEXPECTED_END)); 
         }
-        body(it)?;
+        reader(it)?;
         if it.cur() - section_start != section_length as usize {
             return Err(Error::Malformed(SECTION_SIZE_MISMATCH));
         }
-        Ok(())
     } else if !it.empty() && it.peek_u8()? > 11 {
-        Err(Error::Malformed(INVALID_SECTION_ID))
-    } else {
-        if let Some(ref mut else_fn) = else_fn { 
-            else_fn(); 
-        }
-        Ok(())
+        return Err(Error::Malformed(INVALID_SECTION_ID))
     }
+    ignore_custom_section(bytes, it)?;
+    Ok(())
 }
