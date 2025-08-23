@@ -185,7 +185,8 @@ fn validate_missing(_: &mut Module, _: &mut ByteIter, _: &Function, _: &mut Vali
     Err(Error::Malformed(UNKNOWN_INSTRUCTION))
 }
 
-fn nextop(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
+#[inline]
+fn next_op(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let byte = it.read_u8()?;
     get_validators()[byte as usize](m, it, f, vs, cs)
 }
@@ -193,11 +194,11 @@ fn nextop(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorSta
 // ---------------- Control Flow Validators ----------------
 fn validate_unreachable(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     vs.polymorphize();
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_nop(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_block(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
@@ -212,7 +213,7 @@ fn validate_block(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Vali
         control_type: ControlType::Block { start: block_start }
     });
     vs.depolymorphize();
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_loop(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
@@ -225,7 +226,7 @@ fn validate_loop(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Valid
         control_type: ControlType::Loop
     });
     vs.depolymorphize();
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_if(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
@@ -241,7 +242,7 @@ fn validate_if(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Validat
         control_type: ControlType::If { start: if_start }
     });
     vs.depolymorphize();
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_else(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
@@ -256,7 +257,7 @@ fn validate_else(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Valid
                 let else_start = it.cur();
                 top.control_type = ControlType::IfElse { if_start: start, else_start };
                 vs.depolymorphize();
-                nextop(m, it, f, vs, cs)
+                next_op(m, it, f, vs, cs)
             }
             _ => Err(Error::Validation(ELSE_MUST_CLOSE_IF)),
         }
@@ -304,21 +305,21 @@ fn validate_end(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Valida
     vs.pop_slice(&[ValType::Null])?;
     vs.set_polymorphism(top.polymorphic);
     vs.push_slice(top.sig.results_view());
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_br(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let depth: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     vs.check_br(cs, depth)?;
     vs.polymorphize();
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_br_if(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     vs.pop_slice(&[ValType::I32])?;
     let depth: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     vs.check_br(cs, depth)?;
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_br_table(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
@@ -360,54 +361,54 @@ fn validate_br_table(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut V
         }
     }
     vs.polymorphize();
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_return(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let depth = (cs.len() - 1) as u32;
     vs.check_br(cs, depth)?;
     vs.polymorphize();
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 // ---------------- Stack Manipulation ----------------
 fn validate_drop(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let _ = vs.back()?;
     vs.pop_slice(&[vs.back()?])?;
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_select(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     vs.pop_slice(&[ValType::I32])?;
     let ty = vs.back()?;
-    if ty != ValType::Any && !crate::spec::is_val_type(ty as u8) {
+    if ty != ValType::Any && !is_val_type(ty as u8) {
         return Err(Error::Validation(TYPE_MISMATCH));
     }
     vs.pop_slice(&[ty, ty])?;
     vs.push(ty);
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 // ---------------- Variable Instructions ----------------
-fn validate_localget(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
+fn validate_local_get(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let local_idx: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if (local_idx as usize) >= f.locals.len() {
         return Err(Error::Validation(UNKNOWN_LOCAL));
     }
     vs.push(f.locals[local_idx as usize]);
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
-fn validate_localset(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
+fn validate_local_set(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let local_idx: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if (local_idx as usize) >= f.locals.len() {
         return Err(Error::Validation(UNKNOWN_LOCAL));
     }
     vs.pop_slice(&[f.locals[local_idx as usize]])?;
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
-fn validate_localtee(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
+fn validate_local_tee(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let local_idx: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if (local_idx as usize) >= f.locals.len() {
         return Err(Error::Validation(UNKNOWN_LOCAL));
@@ -415,19 +416,19 @@ fn validate_localtee(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut V
     let ty = f.locals[local_idx as usize];
     vs.pop_slice(&[ty])?;
     vs.push(ty);
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
-fn validate_globalget(m: &mut Module, it: &mut ByteIter, _f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
+fn validate_global_get(m: &mut Module, it: &mut ByteIter, _f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let global_idx: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if (global_idx as usize) >= m.globals.len() {
         return Err(Error::Validation(UNKNOWN_GLOBAL));
     }
     vs.push(m.globals[global_idx as usize].ty);
-    nextop(m, it, _f, vs, cs)
+    next_op(m, it, _f, vs, cs)
 }
 
-fn validate_globalset(m: &mut Module, it: &mut ByteIter, _f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
+fn validate_global_set(m: &mut Module, it: &mut ByteIter, _f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let global_idx: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if (global_idx as usize) >= m.globals.len() {
         return Err(Error::Validation(UNKNOWN_GLOBAL));
@@ -435,44 +436,45 @@ fn validate_globalset(m: &mut Module, it: &mut ByteIter, _f: &Function, vs: &mut
         return Err(Error::Validation(GLOBAL_IS_IMMUTABLE));
     }
     vs.pop_slice(&[m.globals[global_idx as usize].ty])?;
-    nextop(m, it, _f, vs, cs)
+    next_op(m, it, _f, vs, cs)
 }
 
 // ---------------- Memory Instructions ----------------
-fn validate_memorysize(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
-    let flag = it.read_u8()?;
-    if flag != 0 {
-        return Err(Error::Malformed(ZERO_FLAG_EXPECTED));
-    } else if m.memory.is_none() {
-        return Err(Error::Validation(UNKNOWN_MEMORY));
-    }
-    vs.push(ValType::I32);
-    nextop(m, it, f, vs, cs)
+macro_rules! assert_valid_memory {
+    ($it:expr, $m:expr) => {
+        let flag = $it.read_u8()?;
+        if flag != 0 {
+            return Err(Error::Malformed(ZERO_FLAG_EXPECTED));
+        } else if $m.memory.is_none() {
+            return Err(Error::Validation(UNKNOWN_MEMORY));
+        }
+    };
 }
 
-fn validate_memorygrow(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
-    let flag = it.read_u8()?;
-    if flag != 0 {
-        return Err(Error::Malformed(ZERO_FLAG_EXPECTED));
-    } else if m.memory.is_none() {
-        return Err(Error::Validation(UNKNOWN_MEMORY));
-    }
+fn validate_memory_size(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
+    assert_valid_memory!(it, m);
+    vs.push(ValType::I32);
+    next_op(m, it, f, vs, cs)
+}
+
+fn validate_memory_grow(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
+    assert_valid_memory!(it, m);
     vs.pop_slice(&[ValType::I32])?;
     vs.push(ValType::I32);
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 // ---------------- Constant Instructions ----------------
 fn validate_i32const(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let _val: i32 = safe_read_sleb128(&m.bytes, &mut it.idx, 32)?;
     vs.push(ValType::I32);
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_i64const(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let _val: i64 = safe_read_sleb128(&m.bytes, &mut it.idx, 64)?;
     vs.push(ValType::I64);
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_f32const(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
@@ -481,7 +483,7 @@ fn validate_f32const(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut V
     }
     it.advance(4);
     vs.push(ValType::F32);
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_f64const(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
@@ -490,7 +492,7 @@ fn validate_f64const(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut V
     }
     it.advance(8);
     vs.push(ValType::F64);
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 // ---------------- Numeric Operations ----------------
@@ -499,7 +501,7 @@ macro_rules! numeric {
         fn $name(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
             vs.pop_slice($in)?;
             for &t in $out { vs.push(t); }
-            nextop(m, it, f, vs, cs)
+            next_op(m, it, f, vs, cs)
         }
     }
 }
@@ -544,7 +546,7 @@ fn validate_load(m: &mut Module, it: &mut ByteIter, val_ty: ValType, natural_ali
     }
     vs.pop_slice(&[ValType::I32])?;
     vs.push(val_ty);
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_store(m: &mut Module, it: &mut ByteIter, val_ty: ValType, natural_align: u32, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
@@ -565,7 +567,7 @@ fn validate_store(m: &mut Module, it: &mut ByteIter, val_ty: ValType, natural_al
         return Err(Error::Validation(ALIGNMENT_TOO_LARGE));
     }
     vs.pop_slice(&[ValType::I32, val_ty])?;
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 macro_rules! load {
@@ -605,7 +607,7 @@ fn validate_call(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Valid
     }
     let sig = &m.functions[func_idx as usize].ty;
     vs.apply_sig(sig)?;
-    nextop(m, it, f, vs, cs)
+    next_op(m, it, f, vs, cs)
 }
 
 fn validate_call_indirect(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
@@ -622,7 +624,7 @@ fn validate_call_indirect(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &
     }
     let sig = &m.types[type_idx as usize];
     vs.apply_sig(sig)?;
-    nextop(m, it, f, vs, cs) 
+    next_op(m, it, f, vs, cs)
 }
 
 // ---------------- Validator Table ----------------
@@ -640,9 +642,9 @@ fn build_validators_table() -> [ValidatorFn; 256] {
         // Stack manipulation
         t[0x1a] = validate_drop; t[0x1b] = validate_select;
         // Variable instructions
-        t[0x20] = validate_localget; t[0x21] = validate_localset;
-        t[0x22] = validate_localtee; t[0x23] = validate_globalget;
-        t[0x24] = validate_globalset;
+        t[0x20] = validate_local_get; t[0x21] = validate_local_set;
+        t[0x22] = validate_local_tee; t[0x23] = validate_global_get;
+        t[0x24] = validate_global_set;
         // Memory loads
         t[0x28] = validate_i32load; t[0x29] = validate_i64load;
         t[0x2a] = validate_f32load; t[0x2b] = validate_f64load;
@@ -658,7 +660,7 @@ fn build_validators_table() -> [ValidatorFn; 256] {
         t[0x3c] = validate_i64store8; t[0x3d] = validate_i64store16;
         t[0x3e] = validate_i64store32;
         // Memory size/grow
-        t[0x3f] = validate_memorysize; t[0x40] = validate_memorygrow;
+        t[0x3f] = validate_memory_size; t[0x40] = validate_memory_grow;
         // Constants
         t[0x41] = validate_i32const; t[0x42] = validate_i64const;
         t[0x43] = validate_f32const; t[0x44] = validate_f64const;
