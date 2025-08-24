@@ -1,12 +1,13 @@
 use crate::spec::{malformed, Error};
 use crate::error_msg::*;
+use crate::Error::*;
 
 #[inline]
 fn read_leb128_u64(bytes: &[u8], mut pos: usize) -> Result<(u64, usize), Error> {
     let mut result = 0u64;
     let mut shift = 0;
     loop {
-        let byte = *bytes.get(pos).ok_or_else(|| Error::Malformed(UNEXPECTED_END))?;
+        let byte = *bytes.get(pos).ok_or_else(|| Malformed(UNEXPECTED_END))?;
         pos += 1;
         result |= ((byte & 0x7f) as u64) << shift;
         if byte & 0x80 == 0 { return Ok((result, pos)); }
@@ -20,7 +21,7 @@ fn read_leb128_i64(bytes: &[u8], mut pos: usize) -> Result<(i64, usize), Error> 
     let mut shift = 0;
     let mut byte;
     loop {
-        byte = *bytes.get(pos).ok_or_else(|| Error::Malformed(UNEXPECTED_END.into()))?;
+        byte = *bytes.get(pos).ok_or_else(|| Malformed(UNEXPECTED_END.into()))?;
         pos += 1;
         if shift < 63 {
             result |= ((byte & 0x7f) as i64) << shift;

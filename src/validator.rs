@@ -4,6 +4,7 @@ use crate::leb128::*;
 use crate::module::*;
 use crate::spec::*;
 use crate::debug_println;
+use crate::Error::*;
 
 // ---------------- Control Flow Structures ----------------
 #[derive(Clone)]
@@ -57,7 +58,7 @@ impl ValidatorStack {
         } else if self.polymorphic {
             Ok(ValType::Any)
         } else {
-            Err(Error::Validation(TYPE_MISMATCH))
+            Err(Validation(TYPE_MISMATCH))
         }
     }
 
@@ -100,7 +101,7 @@ impl ValidatorStack {
     }
     
     fn pop_slice(&mut self, expected: &[ValType]) -> Result<(), Error> {
-        if !self.check_slice(expected) { return Err(Error::Validation(TYPE_MISMATCH)); }
+        if !self.check_slice(expected) { return Err(Validation(TYPE_MISMATCH)); }
         
         let matched = self.count_matching_suffix(expected);
         if matched > 0 {
@@ -125,7 +126,7 @@ impl ValidatorStack {
     
     fn check_br(&mut self, control_stack: &Vec<ControlFrame>, depth: u32) -> Result<(), Error> {
         if (depth as usize) >= control_stack.len() { 
-            return Err(Error::Validation(UNKNOWN_LABEL)); 
+            return Err(Validation(UNKNOWN_LABEL)); 
         }
         let target = &control_stack[control_stack.len() - (depth as usize) - 1];
         self.pop_slice(&target.expected)?;
@@ -164,10 +165,10 @@ impl<'a> Validator<'a> {
         
         let last = bytes[it.cur() - 1];
         if last != 0x0b { 
-            return Err(Error::Malformed(END_OPCODE_EXPECTED)); 
+            return Err(Malformed(END_OPCODE_EXPECTED)); 
         }
         if it.cur() != func.body.end { 
-            return Err(Error::Malformed(SECTION_SIZE_MISMATCH)); 
+            return Err(Malformed(SECTION_SIZE_MISMATCH)); 
         }
         Ok(())
     }
@@ -182,7 +183,7 @@ impl<'a> Validator<'a> {
 type ValidatorFn = fn(&mut Module, &mut ByteIter, &Function, &mut ValidatorStack, &mut Vec<ControlFrame>) -> Result<(), Error>;
 
 fn validate_missing(_: &mut Module, _: &mut ByteIter, _: &Function, _: &mut ValidatorStack, _: &mut Vec<ControlFrame>) -> Result<(), Error> {
-    Err(Error::Malformed(UNKNOWN_INSTRUCTION))
+    Err(Malformed(UNKNOWN_INSTRUCTION))
 }
 
 #[inline]
@@ -250,7 +251,7 @@ fn validate_else(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Valid
         match top.control_type {
             ControlType::If { start } => {
                 if !vs.equals_slice(top.sig.results_view()) {
-                    return Err(Error::Validation(TYPE_MISMATCH));
+                    return Err(Validation(TYPE_MISMATCH));
                 }
                 vs.pop_slice(top.sig.results_view())?;
                 vs.push_slice(&top.sig.params);
@@ -259,23 +260,23 @@ fn validate_else(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Valid
                 vs.depolymorphize();
                 next_op(m, it, f, vs, cs)
             }
-            _ => Err(Error::Validation(ELSE_MUST_CLOSE_IF)),
+            _ => Err(Validation(ELSE_MUST_CLOSE_IF)),
         }
     } else {
-        Err(Error::Validation(ELSE_MUST_CLOSE_IF))
+        Err(Validation(ELSE_MUST_CLOSE_IF))
     }
 }
 
 fn validate_end(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     if cs.len() == 1 { // function end
         if !vs.equals_slice(f.ty.results_view()) {
-            return Err(Error::Validation(TYPE_MISMATCH_STACK_VS_RESULTS));
+            return Err(Validation(TYPE_MISMATCH_STACK_VS_RESULTS));
         }
         return Ok(());
     }
     let top = cs.pop().unwrap();
     if !vs.equals_slice(top.sig.results_view()) {
-        return Err(Error::Validation(TYPE_MISMATCH_STACK_VS_RESULTS));
+        return Err(Validation(TYPE_MISMATCH_STACK_VS_RESULTS));
     }
     vs.pop_slice(top.sig.results_view())?;
     match top.control_type {
@@ -287,7 +288,7 @@ fn validate_end(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Valida
         ControlType::Loop => {}
         ControlType::If { start } => {
             if top.sig.params != top.sig.results_view() {
-                return Err(Error::Validation(TYPE_MISMATCH_PARAMS_VS_RESULTS));
+                return Err(Validation(TYPE_MISMATCH_PARAMS_VS_RESULTS));
             }
             let else_off = it.cur() - 1;
             let end_off = it.cur();
@@ -331,14 +332,14 @@ fn validate_br_table(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut V
         targets.push(lab);
     }
     if it.empty() || m.bytes[it.cur()] == 0x0b {
-        return Err(Error::Malformed(UNEXPECTED_END));
+        return Err(Malformed(UNEXPECTED_END));
     }
     let default_lab: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     targets.push(default_lab);
 
     for &lab in &targets {
         if (lab as usize) >= cs.len() {
-            return Err(Error::Validation(UNKNOWN_LABEL));
+            return Err(Validation(UNKNOWN_LABEL));
         }
     }
 
@@ -348,15 +349,15 @@ fn validate_br_table(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut V
         let target_expected = &cs[base - depth as usize].expected;
         if vs.can_be_anything() {
             if !vs.check_slice(target_expected) {
-                return Err(Error::Validation(TYPE_MISMATCH));
+                return Err(Validation(TYPE_MISMATCH));
             }
             if default_expected != target_expected {
-                return Err(Error::Validation(TYPE_MISMATCH));
+                return Err(Validation(TYPE_MISMATCH));
             }
         } else {
             vs.check_br(cs, depth)?;
             if default_expected != target_expected {
-                return Err(Error::Validation(TYPE_MISMATCH));
+                return Err(Validation(TYPE_MISMATCH));
             }
         }
     }
@@ -382,7 +383,7 @@ fn validate_select(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Val
     vs.pop_slice(&[ValType::I32])?;
     let ty = vs.back()?;
     if ty != ValType::Any && !is_val_type(ty as u8) {
-        return Err(Error::Validation(TYPE_MISMATCH));
+        return Err(Validation(TYPE_MISMATCH));
     }
     vs.pop_slice(&[ty, ty])?;
     vs.push(ty);
@@ -393,7 +394,7 @@ fn validate_select(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Val
 fn validate_local_get(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let local_idx: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if (local_idx as usize) >= f.locals.len() {
-        return Err(Error::Validation(UNKNOWN_LOCAL));
+        return Err(Validation(UNKNOWN_LOCAL));
     }
     vs.push(f.locals[local_idx as usize]);
     next_op(m, it, f, vs, cs)
@@ -402,7 +403,7 @@ fn validate_local_get(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut 
 fn validate_local_set(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let local_idx: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if (local_idx as usize) >= f.locals.len() {
-        return Err(Error::Validation(UNKNOWN_LOCAL));
+        return Err(Validation(UNKNOWN_LOCAL));
     }
     vs.pop_slice(&[f.locals[local_idx as usize]])?;
     next_op(m, it, f, vs, cs)
@@ -411,7 +412,7 @@ fn validate_local_set(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut 
 fn validate_local_tee(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let local_idx: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if (local_idx as usize) >= f.locals.len() {
-        return Err(Error::Validation(UNKNOWN_LOCAL));
+        return Err(Validation(UNKNOWN_LOCAL));
     }
     let ty = f.locals[local_idx as usize];
     vs.pop_slice(&[ty])?;
@@ -422,7 +423,7 @@ fn validate_local_tee(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut 
 fn validate_global_get(m: &mut Module, it: &mut ByteIter, _f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let global_idx: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if (global_idx as usize) >= m.globals.len() {
-        return Err(Error::Validation(UNKNOWN_GLOBAL));
+        return Err(Validation(UNKNOWN_GLOBAL));
     }
     vs.push(m.globals[global_idx as usize].ty);
     next_op(m, it, _f, vs, cs)
@@ -431,9 +432,9 @@ fn validate_global_get(m: &mut Module, it: &mut ByteIter, _f: &Function, vs: &mu
 fn validate_global_set(m: &mut Module, it: &mut ByteIter, _f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let global_idx: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if (global_idx as usize) >= m.globals.len() {
-        return Err(Error::Validation(UNKNOWN_GLOBAL));
+        return Err(Validation(UNKNOWN_GLOBAL));
     } else if !m.globals[global_idx as usize].is_mutable {
-        return Err(Error::Validation(GLOBAL_IS_IMMUTABLE));
+        return Err(Validation(GLOBAL_IS_IMMUTABLE));
     }
     vs.pop_slice(&[m.globals[global_idx as usize].ty])?;
     next_op(m, it, _f, vs, cs)
@@ -444,9 +445,9 @@ macro_rules! assert_valid_memory {
     ($it:expr, $m:expr) => {
         let flag = $it.read_u8()?;
         if flag != 0 {
-            return Err(Error::Malformed(ZERO_FLAG_EXPECTED));
+            return Err(Malformed(ZERO_FLAG_EXPECTED));
         } else if $m.memory.is_none() {
-            return Err(Error::Validation(UNKNOWN_MEMORY));
+            return Err(Validation(UNKNOWN_MEMORY));
         }
     };
 }
@@ -479,7 +480,7 @@ fn validate_i64const(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut V
 
 fn validate_f32const(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     if !it.has_n_left(4) {
-        return Err(Error::Malformed(UNEXPECTED_END));
+        return Err(Malformed(UNEXPECTED_END));
     }
     it.advance(4);
     vs.push(ValType::F32);
@@ -488,7 +489,7 @@ fn validate_f32const(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut V
 
 fn validate_f64const(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     if !it.has_n_left(8) {
-        return Err(Error::Malformed(UNEXPECTED_END));
+        return Err(Malformed(UNEXPECTED_END));
     }
     it.advance(8);
     vs.push(ValType::F64);
@@ -534,15 +535,15 @@ numeric!(validate_f32_f64, &[ValType::F32], &[ValType::F64]);
 fn validate_load(m: &mut Module, it: &mut ByteIter, val_ty: ValType, natural_align: u32, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let align_bits: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if m.memory.is_none() {
-        return Err(Error::Validation(UNKNOWN_MEMORY));
+        return Err(Validation(UNKNOWN_MEMORY));
     }
     if align_bits >= 32 {
-        return Err(Error::Malformed(INT_TOO_LARGE));
+        return Err(Malformed(INT_TOO_LARGE));
     }
     let _off: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     let align = 1u64 << align_bits;
     if align > natural_align as u64 {
-        return Err(Error::Validation(ALIGNMENT_TOO_LARGE));
+        return Err(Validation(ALIGNMENT_TOO_LARGE));
     }
     vs.pop_slice(&[ValType::I32])?;
     vs.push(val_ty);
@@ -555,16 +556,16 @@ fn validate_store(m: &mut Module, it: &mut ByteIter, val_ty: ValType, natural_al
         align_bits = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     } else {
         if m.memory.is_none() {
-            return Err(Error::Validation(UNKNOWN_MEMORY));
+            return Err(Validation(UNKNOWN_MEMORY));
         }
     }
     if align_bits >= 32 {
-        return Err(Error::Malformed(INT_TOO_LARGE));
+        return Err(Malformed(INT_TOO_LARGE));
     }
     let _off: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     let align = 1u64 << align_bits;
     if align > natural_align as u64 {
-        return Err(Error::Validation(ALIGNMENT_TOO_LARGE));
+        return Err(Validation(ALIGNMENT_TOO_LARGE));
     }
     vs.pop_slice(&[ValType::I32, val_ty])?;
     next_op(m, it, f, vs, cs)
@@ -603,7 +604,7 @@ store!(validate_i64store32, ValType::I64, 4);
 fn validate_call(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<(), Error> {
     let func_idx: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if (func_idx as usize) >= m.functions.len() {
-        return Err(Error::Validation(UNKNOWN_FUNC));
+        return Err(Validation(UNKNOWN_FUNC));
     }
     let sig = &m.functions[func_idx as usize].ty;
     vs.apply_sig(sig)?;
@@ -614,13 +615,13 @@ fn validate_call_indirect(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &
     vs.pop_slice(&[ValType::I32])?;
     let type_idx: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if (type_idx as usize) >= m.types.len() {
-        return Err(Error::Validation(UNKNOWN_TYPE));
+        return Err(Validation(UNKNOWN_TYPE));
     }
     let flag = it.read_u8()?;
     if flag != 0 {
-        return Err(Error::Malformed(ZERO_FLAG_EXPECTED));
+        return Err(Malformed(ZERO_FLAG_EXPECTED));
     } else if m.table.is_none() {
-        return Err(Error::Validation(UNKNOWN_TABLE));
+        return Err(Validation(UNKNOWN_TABLE));
     }
     let sig = &m.types[type_idx as usize];
     vs.apply_sig(sig)?;
