@@ -1,5 +1,5 @@
-use crate::spec::Error;
-use crate::error_msg::*;
+use crate::error::*;
+use crate::error::Error::*;
 
 #[derive(Clone, Copy)]
 pub struct ByteIter<'a> {
@@ -16,7 +16,7 @@ impl<'a> ByteIter<'a> {
     pub fn has_n_left(&self, n: usize) -> bool { self.idx + n <= self.bytes.len() }
     #[inline]
     pub fn get_with_at_least(&self, n: usize) -> Result<usize, Error> {
-        if !self.has_n_left(n) { return Err(Error::Malformed(UNEXPECTED_END)); }
+        if !self.has_n_left(n) { return Err(Malformed(UNEXPECTED_END)); }
         Ok(self.idx)
     }
     #[inline]
@@ -25,20 +25,20 @@ impl<'a> ByteIter<'a> {
     pub fn advance(&mut self, n: usize) { self.idx += n; }
     #[inline]
     pub fn read_u8(&mut self) -> Result<u8, Error> {
-        if self.idx >= self.bytes.len() { return Err(Error::Malformed(UNEXPECTED_END)); }
+        if self.idx >= self.bytes.len() { return Err(Malformed(UNEXPECTED_END)); }
         let b = self.bytes[self.idx];
         self.idx += 1;
         Ok(b)
     }
     #[inline]
     pub fn peek_u8(&self) -> Result<u8, Error> {
-        if self.idx >= self.bytes.len() { return Err(Error::Malformed(UNEXPECTED_END)); }
+        if self.idx >= self.bytes.len() { return Err(Malformed(UNEXPECTED_END)); }
         Ok(self.bytes[self.idx])
     }
     #[inline]
     pub fn slice_from(&self, start: usize, len: usize) -> Result<&'a [u8], Error> {
-        let end = start.checked_add(len).ok_or_else(|| Error::Malformed(UNEXPECTED_END_SHORT))?;
-        if end > self.bytes.len() { return Err(Error::Malformed(UNEXPECTED_END_SHORT)); }
+        let end = start.checked_add(len).ok_or(Malformed(UNEXPECTED_END_SHORT))?;
+        if end > self.bytes.len() { return Err(Malformed(UNEXPECTED_END_SHORT)); }
         Ok(&self.bytes[start..end])
     }
 }

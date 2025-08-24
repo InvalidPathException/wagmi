@@ -1,10 +1,10 @@
 use crate::byte_iter::ByteIter;
-use crate::error_msg::*;
+use crate::error::*;
 use crate::leb128::*;
 use crate::module::*;
 use crate::spec::*;
 use crate::debug_println;
-use crate::Error::*;
+use crate::error::Error::*;
 
 // ---------------- Control Flow Structures ----------------
 #[derive(Clone)]
@@ -124,7 +124,7 @@ impl ValidatorStack {
         Ok(())
     }
     
-    fn check_br(&mut self, control_stack: &Vec<ControlFrame>, depth: u32) -> Result<(), Error> {
+    fn check_br(&mut self, control_stack: &[ControlFrame], depth: u32) -> Result<(), Error> {
         if (depth as usize) >= control_stack.len() { 
             return Err(Validation(UNKNOWN_LABEL)); 
         }
@@ -554,10 +554,8 @@ fn validate_store(m: &mut Module, it: &mut ByteIter, val_ty: ValType, natural_al
     let mut align_bits: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     if (1 << 6) & align_bits != 0 {
         align_bits = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
-    } else {
-        if m.memory.is_none() {
-            return Err(Validation(UNKNOWN_MEMORY));
-        }
+    } else if m.memory.is_none() {
+        return Err(Validation(UNKNOWN_MEMORY));
     }
     if align_bits >= 32 {
         return Err(Malformed(INT_TOO_LARGE));
@@ -629,6 +627,7 @@ fn validate_call_indirect(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &
 }
 
 // ---------------- Validator Table ----------------
+#[allow(clippy::all)]
 fn build_validators_table() -> [ValidatorFn; 256] {
     let mut t: [ValidatorFn; 256] = [validate_missing; 256];
         // Control flow
@@ -701,5 +700,5 @@ fn get_validators() -> &'static [ValidatorFn; 256] {
     static VALIDATORS: std::sync::LazyLock<Box<[ValidatorFn; 256]>> = std::sync::LazyLock::new(|| {
         Box::new(build_validators_table())
     });
-    &**VALIDATORS
+    &VALIDATORS
 }

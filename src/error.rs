@@ -1,3 +1,28 @@
+use std::fmt::{Display, Formatter};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Error {
+    Malformed(&'static str),
+    Validation(&'static str),
+    Trap(&'static str),
+    Link(&'static str),
+    Uninstantiable(&'static str),
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Malformed(s)
+            | Error::Validation(s)
+            | Error::Trap(s)
+            | Error::Link(s)
+            | Error::Uninstantiable(s) => f.write_str(s),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
 // Malformed errors
 pub const END_OPCODE_EXPECTED: &str = "END opcode expected";
 pub const FUNC_CODE_INCONSISTENT: &str = "function and code section have inconsistent lengths";

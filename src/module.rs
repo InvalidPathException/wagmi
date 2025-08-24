@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::byte_iter::*;
-use crate::error_msg::*;
+use crate::error::*;
+use crate::error::Error::*;
 use crate::leb128::*;
 use crate::spec::*;
 use crate::validator::Validator;
-use crate::Error::*;
 
 // ---------------- Import/Export related ----------------
 #[derive(Clone, Debug)]
@@ -163,7 +163,7 @@ impl Module {
         let n_types: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
         self.types.reserve_exact(n_types as usize);
 
-        for i in 0..n_types as usize {
+        for _i in 0..n_types as usize {
             assert_not_empty!(it);
             let byte = it.read_u8()?;
             if byte != 0x60 {
@@ -213,7 +213,7 @@ impl Module {
             if module_start + module_len as usize > bytes.len() {
                 return Err(Malformed(UNEXPECTED_END));
             }
-            if !is_valid_utf8(&bytes[module_start..module_start + module_len as usize]) {
+            if !is_utf8(&bytes[module_start..module_start + module_len as usize]) {
                 return Err(Malformed(INVALID_UTF8));
             }
             let module_name = String::from_utf8(bytes[module_start..module_start + module_len as usize].to_vec()).unwrap();
@@ -225,7 +225,7 @@ impl Module {
             if field_start + field_len as usize > bytes.len() {
                 return Err(Malformed(UNEXPECTED_END));
             }
-            if !is_valid_utf8(&bytes[field_start..field_start + field_len as usize]) {
+            if !is_utf8(&bytes[field_start..field_start + field_len as usize]) {
                 return Err(Malformed(INVALID_UTF8));
             }
             let field_name = String::from_utf8(bytes[field_start..field_start + field_len as usize].to_vec()).unwrap();
@@ -556,7 +556,8 @@ impl Module {
     }
 
     // TODO: move to validator?
-    fn validate_const(bytes: &[u8], it: &mut ByteIter, expected: ValType, globals: &Vec<Global>) -> Result<(), Error> {
+    #[allow(clippy::all)]
+    fn validate_const(bytes: &[u8], it: &mut ByteIter, expected: ValType, globals: &[Global]) -> Result<(), Error> {
         let mut stack: Vec<ValType> = Vec::new();
         loop {
             let byte = it.read_u8()?;
@@ -638,7 +639,7 @@ fn ignore_custom_section(bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
         let name_start = it.cur();
         it.advance(name_len as usize);
 
-        if !is_valid_utf8(&bytes[name_start..name_start + name_len as usize]) {
+        if !is_utf8(&bytes[name_start..name_start + name_len as usize]) {
             return Err(Malformed(INVALID_UTF8));
         }
 

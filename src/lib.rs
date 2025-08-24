@@ -3,10 +3,10 @@ pub mod module;
 pub mod spec;
 mod leb128;
 mod byte_iter;
-mod error_msg;
+mod error;
 mod validator;
 
-pub use spec::{Error, ValType, Signature};
+pub use spec::{ValType, Signature};
 pub use module::Module;
 
 // Debug macro that only prints when wasm_debug feature is enabled
