@@ -150,7 +150,7 @@ impl Module {
         section(&mut it, bytes, 10, |it: &mut ByteIter| { self.parse_code_section(bytes, it) })?;
         section(&mut it, bytes, 11, |it: &mut ByteIter| { self.parse_data_section(bytes, it) })?;
         
-        if !it.empty() { return Err(Malformed(JUNK_AFTER_LAST_SECTION)); }
+        if !it.empty() { return Err(Malformed(LENGTH_OUT_OF_BOUNDS)); }
         Ok(())
     }
 
@@ -663,6 +663,9 @@ where
         reader(it)?;
         if it.cur() - section_start != section_length as usize {
             return Err(Malformed(SECTION_SIZE_MISMATCH));
+        }
+        if !it.empty() && it.peek_u8()? == id {
+            return Err(Malformed(JUNK_AFTER_LAST_SECTION));
         }
     } else if !it.empty() && it.peek_u8()? > 11 {
         return Err(Malformed(INVALID_SECTION_ID))

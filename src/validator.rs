@@ -262,13 +262,13 @@ fn validate_else(_: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut Valid
 fn validate_end(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut ValidatorStack, cs: &mut Vec<ControlFrame>) -> Result<Action, Error> {
     if cs.len() == 1 { // function end
         if !vs.equals_slice(f.ty.results_view()) {
-            return Err(Validation(TYPE_MISMATCH_STACK_VS_RESULTS));
+            return Err(Validation(TYPE_MISMATCH));
         }
         return Ok(Action::End);
     }
     let top = cs.pop().unwrap();
     if !vs.equals_slice(top.sig.results_view()) {
-        return Err(Validation(TYPE_MISMATCH_STACK_VS_RESULTS));
+        return Err(Validation(TYPE_MISMATCH));
     }
     vs.pop_slice(top.sig.results_view())?;
     match top.control_type {
@@ -280,7 +280,7 @@ fn validate_end(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Valida
         ControlType::Loop => {}
         ControlType::If { start } => {
             if top.sig.params != top.sig.results_view() {
-                return Err(Validation(TYPE_MISMATCH_PARAMS_VS_RESULTS));
+                return Err(Validation(TYPE_MISMATCH));
             }
             let else_off = it.cur() - 1;
             let end_off = it.cur();
