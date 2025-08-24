@@ -13,20 +13,15 @@ use crate::validator::Validator;
 pub struct ImportRef { pub module: String, pub field: String }
 
 #[derive(Clone, Copy)]
-pub enum ExternKind {
-    Func = 0, 
-    Table = 1, 
-    Mem = 2, 
-    Global = 3 
-}
+pub enum ExternType { Func = 0, Table = 1, Mem = 2, Global = 3 }
 
-impl ExternKind {
+impl ExternType {
     pub fn from_byte(byte: u8) -> Option<Self> {
         match byte {
-            0 => Some(ExternKind::Func),
-            1 => Some(ExternKind::Table),
-            2 => Some(ExternKind::Mem),
-            3 => Some(ExternKind::Global),
+            0 => Some(ExternType::Func),
+            1 => Some(ExternType::Table),
+            2 => Some(ExternType::Mem),
+            3 => Some(ExternType::Global),
             _ => None,
         }
     }
@@ -66,7 +61,7 @@ pub struct Global {
 }
 
 #[derive(Clone)]
-pub struct Export { pub kind: ExternKind, pub idx: u32 }
+pub struct Export { pub extern_type: ExternType, pub idx: u32 }
 
 #[derive(Clone)]
 pub struct Element { pub ty: ValType }
@@ -81,7 +76,7 @@ pub struct IfJump { pub else_offset: usize, pub end_offset: usize }
 pub struct Module {
     pub bytes: Rc<Vec<u8>>,
     pub types: Vec<Signature>,
-    pub imports: HashMap<String, HashMap<String, ExternKind>>,
+    pub imports: HashMap<String, HashMap<String, ExternType>>,
     pub table: Option<Table>,
     pub memory: Option<Memory>,
     pub globals: Vec<Global>,
@@ -232,17 +227,17 @@ impl Module {
             it.idx = field_start + field_len as usize;
 
             let byte = it.read_u8()?;
-            let kind = ExternKind::from_byte(byte)
+            let extern_type = ExternType::from_byte(byte)
                 .ok_or(Malformed(MALFORMED_IMPORT_KIND))?;
 
-            self.imports.entry(module_name.clone()).or_default().insert(field_name.clone(), kind);
+            self.imports.entry(module_name.clone()).or_default().insert(field_name.clone(), extern_type);
             let import = Some(ImportRef {
                 module: module_name.clone(),
                 field: field_name.clone()
             });
 
-            match kind {
-                ExternKind::Func => {
+            match extern_type {
+                ExternType::Func => {
                     let type_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
                     if (type_idx as usize) >= self.types.len() {
                         return Err(Validation(UNKNOWN_TYPE));
@@ -255,7 +250,7 @@ impl Module {
                         is_declared: false
                     });
                 }
-                ExternKind::Table => {
+                ExternType::Table => {
                     if self.table.is_some() {
                         return Err(Validation(MULTIPLE_TABLES));
                     }
@@ -267,14 +262,14 @@ impl Module {
                     let (min, max) = get_table_limits(bytes, it)?;
                     self.table = Some(Table { min, max, ty: ValType::F64, import });
                 }
-                ExternKind::Mem => {
+                ExternType::Mem => {
                     if self.memory.is_some() {
                         return Err(Validation(MULTIPLE_MEMORIES));
                     }
                     let (min, max) = get_memory_limits(bytes, it)?;
                     self.memory = Some(Memory { min, max, import });
                 }
-                ExternKind::Global => {
+                ExternType::Global => {
                     let ty: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
                     if !is_val_type(ty as u8) {
                         return Err(Malformed(INVALID_GLOBAL_TYPE));
@@ -386,7 +381,7 @@ impl Module {
             it.idx = name_start + name_len as usize;
 
             let byte = it.read_u8()?;
-            let kind = ExternKind::from_byte(byte)
+            let extern_type = ExternType::from_byte(byte)
                 .ok_or(Validation(INVALID_EXPORT_DESC))?;
 
             let export_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
@@ -395,24 +390,24 @@ impl Module {
                 return Err(Validation(DUPLICATE_EXPORT_NAME));
             }
 
-            match kind {
-                ExternKind::Func => {
+            match extern_type {
+                ExternType::Func => {
                     if (export_idx as usize) >= self.functions.len() {
                         return Err(Validation(UNKNOWN_FUNC));
                     }
                     self.functions[export_idx as usize].is_declared = true;
                 }
-                ExternKind::Table => {
+                ExternType::Table => {
                     if export_idx != 0 {
                         return Err(Validation(UNKNOWN_TABLE));
                     }
                 }
-                ExternKind::Mem => {
+                ExternType::Mem => {
                     if export_idx != 0 || self.memory.is_some() {
                         return Err(Validation(UNKNOWN_MEMORY));
                     }
                 }
-                ExternKind::Global => {
+                ExternType::Global => {
                     if (export_idx as usize) >= self.globals.len() {
                         return Err(Validation(UNKNOWN_GLOBAL));
                     }
@@ -420,7 +415,7 @@ impl Module {
             }
 
             self.exports.insert(name, Export {
-                kind,
+                extern_type,
                 idx: export_idx
             });
         }
