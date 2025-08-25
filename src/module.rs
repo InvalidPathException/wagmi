@@ -6,7 +6,7 @@ use crate::error::*;
 use crate::error::Error::*;
 use crate::leb128::*;
 use crate::spec::*;
-use crate::validator::Validator;
+use crate::validator::{Validator, validate_const};
 
 // ---------------- Import/Export related ----------------
 #[derive(Clone, Debug)]
@@ -126,13 +126,13 @@ impl Module {
         let bytes: &[u8] = &bytes_arc[..];
         
         // Check magic number and version
-        if bytes.len() < 4 { return Err(Malformed(UNEXPECTED_END)); }
+        if bytes.len() < 4 { return Err(Malformed(UNEXPECTED_END_SHORT)); }
         if &bytes[0..4] != MAGIC_HEADER {
             return Err(Malformed(MAGIC_HEADER_NOT_DETECTED));
         }
         
         let mut it = ByteIter::new(bytes, 4);
-        if bytes.len() < 8 { return Err(Malformed(UNEXPECTED_END)); }
+        if bytes.len() < 8 { return Err(Malformed(UNEXPECTED_END_SHORT)); }
         if u32::from_le_bytes(bytes[4..8].try_into().unwrap()) != 1 {
             return Err(Malformed(UNKNOWN_BINARY_VERSION));
         }
@@ -149,6 +149,13 @@ impl Module {
         section(&mut it, bytes, 9, |it: &mut ByteIter| { self.parse_element_section(bytes, it) })?;
         section(&mut it, bytes, 10, |it: &mut ByteIter| { self.parse_code_section(bytes, it) })?;
         section(&mut it, bytes, 11, |it: &mut ByteIter| { self.parse_data_section(bytes, it) })?;
+        
+        // Check that all non-imported functions have code
+        for func in &self.functions {
+            if func.import.is_none() && func.body.start == 0 && func.body.end == 0 {
+                return Err(Malformed(FUNC_CODE_INCONSISTENT));
+            }
+        }
         
         if !it.empty() { return Err(Malformed(LENGTH_OUT_OF_BOUNDS)); }
         Ok(())
@@ -179,7 +186,7 @@ impl Module {
 
             let n_results: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             if n_results > 1 {
-                return Err(Malformed(INVALID_RESULT_ARITY));
+                return Err(Validation(INVALID_RESULT_ARITY));
             }
             if n_results == 1 {
                 let ty = it.read_u8()?;
@@ -361,7 +368,7 @@ impl Module {
                 initializer_offset,
                 import: None
             });
-            Self::validate_const(bytes, it, valtype_from_byte(ty).unwrap(), &self.globals)?;
+            validate_const(bytes, it, valtype_from_byte(ty).unwrap(), &self.globals)?;
         }
         Ok(())
     }
@@ -403,7 +410,7 @@ impl Module {
                     }
                 }
                 ExternType::Mem => {
-                    if export_idx != 0 || self.memory.is_some() {
+                    if export_idx != 0 || self.memory.is_none() {
                         return Err(Validation(UNKNOWN_MEMORY));
                     }
                 }
@@ -444,7 +451,7 @@ impl Module {
             if self.table.is_none() {
                 return Err(Validation(UNKNOWN_TABLE));
             }
-            Self::validate_const(bytes, it, ValType::I32, &self.globals)?;
+            validate_const(bytes, it, ValType::I32, &self.globals)?;
 
             let n_elems: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             for _ in 0..n_elems {
@@ -531,7 +538,7 @@ impl Module {
             }
 
             let initializer_offset = it.cur();
-            Self::validate_const(bytes, it, ValType::I32, &self.globals)?;
+            validate_const(bytes, it, ValType::I32, &self.globals)?;
 
             let data_length: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             if !it.has_n_left(data_length as usize) {
@@ -550,63 +557,6 @@ impl Module {
         Ok(())
     }
 
-    // TODO: move to validator?
-    #[allow(clippy::all)]
-    fn validate_const(bytes: &[u8], it: &mut ByteIter, expected: ValType, globals: &[Global]) -> Result<(), Error> {
-        let mut stack: Vec<ValType> = Vec::new();
-        loop {
-            let byte = it.read_u8()?;
-            if byte == 0x0b { // end
-                break;
-            }
-            match byte {
-                0x23 => { // global.get
-                    let global_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
-                    if (global_idx as usize) >= globals.len() || globals[global_idx as usize].import.is_none() {
-                        return Err(Validation(UNKNOWN_GLOBAL));
-                    }
-                    if globals[global_idx as usize].is_mutable {
-                        return Err(Validation(CONST_EXP_REQUIRED));
-                    }
-                    stack.push(globals[global_idx as usize].ty);
-                }
-                0x41 => { // i32.const
-                    let _val: i32 = safe_read_sleb128(bytes, &mut it.idx, 32)?;
-                    stack.push(ValType::I32);
-                }
-                0x42 => { // i64.const
-                    let _val: i64 = safe_read_sleb128(bytes, &mut it.idx, 64)?;
-                    stack.push(ValType::I64);
-                }
-                0x43 => { // f32.const
-                    if !it.has_n_left(4) { return Err(Malformed(UNEXPECTED_END)); }
-                    it.advance(4);
-                    stack.push(ValType::F32);
-                }
-                0x44 => { // f64.const
-                    if !it.has_n_left(8) { return Err(Malformed(UNEXPECTED_END)); }
-                    it.advance(8);
-                    stack.push(ValType::F64);
-                }
-                0x6a | 0x6b | 0x6c => { // i32 add, sub, mul
-                    if stack.len() < 2 || stack.pop().unwrap() != ValType::I32 ||
-                        *stack.last().unwrap_or(&ValType::Null) != ValType::I32 {
-                        return Err(Validation(TYPE_MISMATCH));
-                    }
-                }
-                0x7a | 0x7b | 0x7c => { // i64 add, sub, mul
-                    if stack.len() < 2 || stack.pop().unwrap() != ValType::I64 ||
-                        *stack.last().unwrap_or(&ValType::Null) != ValType::I64 {
-                        return Err(Validation(TYPE_MISMATCH));
-                    }
-                }
-                _ => { return Err(Malformed(ILLEGAL_OPCODE)); }
-            }
-        }
-
-        if !(stack.len() == 1 && stack[0] == expected) { return Err(Validation(TYPE_MISMATCH)); }
-        Ok(())
-    }
 }
 
 // ---------------- Helper Functions ----------------
@@ -682,8 +632,6 @@ fn get_limits(bytes: &[u8], it: &mut ByteIter, upper: u32) -> Result<(u32, u32),
     } else {
         upper
     };
-
-    if max < initial { return Err(Validation(SIZE_MIN_GREATER_THAN_MAX)); }
     Ok((initial, max))
 }
 
@@ -692,9 +640,16 @@ fn get_memory_limits(bytes: &[u8], it: &mut ByteIter) -> Result<(u32, u32), Erro
     if initial > Module::MAX_PAGES || max > Module::MAX_PAGES {
         return Err(Validation(MEMORY_SIZE_LIMIT));
     }
+    if max < initial {
+        return Err(Validation(SIZE_MIN_GREATER_THAN_MAX));
+    }
     Ok((initial, max))
 }
 
 fn get_table_limits(bytes: &[u8], it: &mut ByteIter) -> Result<(u32, u32), Error> {
-    get_limits(bytes, it, u32::MAX)
+    let (initial, max) = get_limits(bytes, it, u32::MAX)?;
+    if max < initial {
+        return Err(Validation(SIZE_MIN_GREATER_THAN_MAX));
+    }
+    Ok((initial, max))
 }

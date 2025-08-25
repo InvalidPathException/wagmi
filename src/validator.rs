@@ -138,6 +138,70 @@ impl ValidatorStack {
     }
 }
 
+// ---------------- Constant Expression Validation ----------------
+pub fn validate_const(bytes: &[u8], it: &mut ByteIter, expected: ValType, globals: &[Global]) -> Result<(), Error> {
+    let mut stack: Vec<ValType> = Vec::new();
+    loop {
+        let byte = it.read_u8()?;
+        if byte == 0x0b { // end
+            break;
+        }
+        match byte {
+            0x23 => { // global.get
+                let global_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
+                if (global_idx as usize) >= globals.len() || globals[global_idx as usize].import.is_none() {
+                    return Err(Validation(UNKNOWN_GLOBAL));
+                }
+                if globals[global_idx as usize].is_mutable {
+                    return Err(Validation(CONST_EXP_REQUIRED));
+                }
+                stack.push(globals[global_idx as usize].ty);
+            }
+            0x41 => { // i32.const
+                let _val: i32 = safe_read_sleb128(bytes, &mut it.idx, 32)?;
+                stack.push(ValType::I32);
+            }
+            0x42 => { // i64.const
+                let _val: i64 = safe_read_sleb128(bytes, &mut it.idx, 64)?;
+                stack.push(ValType::I64);
+            }
+            0x43 => { // f32.const
+                if !it.has_n_left(4) { return Err(Malformed(UNEXPECTED_END)); }
+                it.advance(4);
+                stack.push(ValType::F32);
+            }
+            0x44 => { // f64.const
+                if !it.has_n_left(8) { return Err(Malformed(UNEXPECTED_END)); }
+                it.advance(8);
+                stack.push(ValType::F64);
+            }
+            0x6a | 0x6b | 0x6c => { // i32 add, sub, mul
+                if stack.len() < 2 || stack.pop().unwrap() != ValType::I32 ||
+                    *stack.last().unwrap_or(&ValType::Null) != ValType::I32 {
+                    return Err(Validation(TYPE_MISMATCH));
+                }
+            }
+            0x7a | 0x7b | 0x7c => { // i64 add, sub, mul
+                if stack.len() < 2 || stack.pop().unwrap() != ValType::I64 ||
+                    *stack.last().unwrap_or(&ValType::Null) != ValType::I64 {
+                    return Err(Validation(TYPE_MISMATCH));
+                }
+            }
+            other => {
+                let is_valid_instruction = get_validators()[other as usize] as usize != validate_missing as usize;
+                return if is_valid_instruction {
+                    Err(Validation(CONST_EXP_REQUIRED))
+                } else {
+                    Err(Malformed(ILLEGAL_OPCODE))
+                }
+            }
+        }
+    }
+
+    if !(stack.len() == 1 && stack[0] == expected) { return Err(Validation(TYPE_MISMATCH)); }
+    Ok(())
+}
+
 // ---------------- Function Validation ----------------
 pub struct Validator<'a> {
     module: &'a mut Module,

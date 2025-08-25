@@ -25,7 +25,6 @@ pub fn valtype_from_byte(byte: u8) -> Option<ValType> {
         0x7d => Some(ValType::F32),
         0x7c => Some(ValType::F64),
         0x00 => Some(ValType::Null),
-        0xff => Some(ValType::Any),
         _ => None,
     }
 }
