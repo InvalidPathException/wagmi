@@ -5,6 +5,7 @@ mod leb128;
 mod byte_iter;
 mod error;
 mod validator;
+mod instance;
 
 pub use signature::{ValType, Signature};
 pub use module::Module;
