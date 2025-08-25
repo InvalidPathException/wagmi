@@ -1,8 +1,6 @@
 use crate::error::*;
 use crate::leb128::*;
 
-pub const MAGIC_HEADER: &[u8; 4] = b"\0asm";
-
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum ValType {
@@ -17,7 +15,7 @@ pub enum ValType {
 pub fn is_val_type(byte: u8) -> bool { matches!(byte, 0x7c..=0x7f) }
 
 #[inline]
-pub fn valtype_from_byte(byte: u8) -> Option<ValType> {
+pub fn val_type_from_byte(byte: u8) -> Option<ValType> {
     match byte {
         0x7f => Some(ValType::I32),
         0x7e => Some(ValType::I64),
@@ -35,14 +33,14 @@ pub struct Signature {
 }
 
 impl Signature {
-    pub fn read_blocktype(types: &[Signature], bytes: &[u8], idx: &mut usize) -> Result<Signature, Error> {
+    pub fn read(types: &[Signature], bytes: &[u8], idx: &mut usize) -> Result<Signature, Error> {
         const EMPTY_TYPE: u8 = 0x40;
         if *idx >= bytes.len() { return Err(Error::Malformed(UNEXPECTED_END)); }
         let byte = bytes[*idx];
         if byte == EMPTY_TYPE {
             *idx += 1;
             Ok(Signature::default())
-        } else if let Some(vt) = valtype_from_byte(byte) {
+        } else if let Some(vt) = val_type_from_byte(byte) {
             *idx += 1;
             Ok(Signature { params: vec![], result: Some(vt) })
         } else {
@@ -54,14 +52,3 @@ impl Signature {
         }
     }
 }
-
-#[inline(always)]
-pub fn mutability_from_byte(byte: u8) -> Option<bool> {
-    match byte {
-        0 => Some(false),
-        1 => Some(true),
-        _ => None,
-    }
-}
-
-#[inline(always)] pub fn is_utf8(bytes: &[u8]) -> bool { std::str::from_utf8(bytes).is_ok() }

@@ -5,8 +5,10 @@ use crate::byte_iter::*;
 use crate::error::*;
 use crate::error::Error::*;
 use crate::leb128::*;
-use crate::spec::*;
+use crate::signature::*;
 use crate::validator::{Validator, validate_const};
+
+const MAGIC_HEADER: &[u8; 4] = b"\0asm";
 
 // ---------------- Import/Export related ----------------
 #[derive(Clone, Debug)]
@@ -177,7 +179,7 @@ impl Module {
                 if !is_val_type(ty) {
                     return Err(Malformed(INVALID_VALUE_TYPE));
                 }
-                sig.params.push(valtype_from_byte(ty).unwrap());
+                sig.params.push(val_type_from_byte(ty).unwrap());
             }
 
             let n_results: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
@@ -189,7 +191,7 @@ impl Module {
                 if !is_val_type(ty) {
                     return Err(Malformed(INVALID_RESULT_TYPE));
                 }
-                sig.result = Some(valtype_from_byte(ty).unwrap());
+                sig.result = Some(val_type_from_byte(ty).unwrap());
             }
 
             self.types.push(sig);
@@ -210,10 +212,8 @@ impl Module {
             if module_start + module_len as usize > bytes.len() {
                 return Err(Malformed(UNEXPECTED_END));
             }
-            if !is_utf8(&bytes[module_start..module_start + module_len as usize]) {
-                return Err(Malformed(INVALID_UTF8));
-            }
-            let module_name = String::from_utf8(bytes[module_start..module_start + module_len as usize].to_vec()).unwrap();
+            let module_name = String::from_utf8(bytes[module_start..module_start + module_len as usize].to_vec())
+                .map_err(|_| Malformed(INVALID_UTF8))?;
             it.idx = module_start + module_len as usize;
 
             // Field name
@@ -222,10 +222,8 @@ impl Module {
             if field_start + field_len as usize > bytes.len() {
                 return Err(Malformed(UNEXPECTED_END));
             }
-            if !is_utf8(&bytes[field_start..field_start + field_len as usize]) {
-                return Err(Malformed(INVALID_UTF8));
-            }
-            let field_name = String::from_utf8(bytes[field_start..field_start + field_len as usize].to_vec()).unwrap();
+            let field_name = String::from_utf8(bytes[field_start..field_start + field_len as usize].to_vec())
+                .map_err(|_| Malformed(INVALID_UTF8))?;
             it.idx = field_start + field_len as usize;
 
             let byte = it.read_u8()?;
@@ -277,10 +275,9 @@ impl Module {
                         return Err(Malformed(INVALID_GLOBAL_TYPE));
                     }
                     let mut_byte = it.read_u8()?;
-                    let is_mutable = mutability_from_byte(mut_byte)
-                        .ok_or(Malformed(INVALID_MUTABILITY))?;
+                    let is_mutable = mutability_from_byte(mut_byte)?;
                     self.globals.push(Global {
-                        ty: valtype_from_byte(ty as u8).unwrap(),
+                        ty: val_type_from_byte(ty as u8).unwrap(),
                         is_mutable,
                         initializer_offset: 0,
                         import
@@ -354,16 +351,15 @@ impl Module {
                 return Err(Malformed(INVALID_GLOBAL_TYPE));
             }
             let mut_byte = it.read_u8()?;
-            let is_mutable = mutability_from_byte(mut_byte)
-                .ok_or(Malformed(INVALID_MUTABILITY))?;
+            let is_mutable = mutability_from_byte(mut_byte)?;
             let initializer_offset = it.cur();
             self.globals.push(Global {
-                ty: valtype_from_byte(ty).unwrap(),
+                ty: val_type_from_byte(ty).unwrap(),
                 is_mutable,
                 initializer_offset,
                 import: None
             });
-            validate_const(bytes, it, valtype_from_byte(ty).unwrap(), &self.globals)?;
+            validate_const(bytes, it, val_type_from_byte(ty).unwrap(), &self.globals)?;
         }
         Ok(())
     }
@@ -379,7 +375,8 @@ impl Module {
             if name_start + name_len as usize > bytes.len() {
                 return Err(Malformed(UNEXPECTED_END));
             }
-            let name = String::from_utf8(bytes[name_start..name_start + name_len as usize].to_vec()).unwrap();
+            let name = String::from_utf8(bytes[name_start..name_start + name_len as usize].to_vec())
+                .map_err(|_| Malformed(INVALID_UTF8))?;
             it.idx = name_start + name_len as usize;
 
             let byte = it.read_u8()?;
@@ -492,7 +489,7 @@ impl Module {
                     return Err(Validation(INVALID_LOCAL_TYPE));
                 }
                 for _ in 0..n_locals {
-                    let vt = valtype_from_byte(ty).unwrap();
+                    let vt = val_type_from_byte(ty).unwrap();
                     let function = &mut self.functions[i];
                     function.locals.push(vt);
                     if function.locals.len() > Module::MAX_LOCALS {
@@ -579,7 +576,8 @@ fn ignore_custom_section(bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
         let name_start = it.cur();
         it.advance(name_len as usize);
 
-        if !is_utf8(&bytes[name_start..name_start + name_len as usize]) {
+        // Validate UTF-8 encoding
+        if std::str::from_utf8(&bytes[name_start..name_start + name_len as usize]).is_err() {
             return Err(Malformed(INVALID_UTF8));
         }
 
@@ -647,4 +645,12 @@ fn get_table_limits(bytes: &[u8], it: &mut ByteIter) -> Result<(u32, u32), Error
         return Err(Validation(MIN_GREATER_THAN_MAX));
     }
     Ok((initial, max))
+}
+
+fn mutability_from_byte(byte: u8) -> Result<bool, Error> {
+    match byte {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(Malformed(INVALID_MUTABILITY)),
+    }
 }

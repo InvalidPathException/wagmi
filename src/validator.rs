@@ -2,7 +2,7 @@ use crate::byte_iter::ByteIter;
 use crate::error::*;
 use crate::leb128::*;
 use crate::module::*;
-use crate::spec::*;
+use crate::signature::*;
 use crate::error::Error::*;
 
 // ---------------- Control Flow Structures ----------------
@@ -232,7 +232,7 @@ fn validate_nop(_: &mut Module, _: &mut ByteIter, _: &Function, _: &mut Validato
 }
 
 fn validate_block(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut ValidatorStack) -> Result<Action, Error> {
-    let sig = Signature::read_blocktype(&m.types, &m.bytes, &mut it.idx)?;
+    let sig = Signature::read(&m.types, &m.bytes, &mut it.idx)?;
     let block_start = it.cur();
     vs.pop_vals(&sig.params)?;
     vs.push_ctrl(sig, ControlType::Block { start: block_start })?;
@@ -240,14 +240,14 @@ fn validate_block(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut Vali
 }
 
 fn validate_loop(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut ValidatorStack) -> Result<Action, Error> {
-    let sig = Signature::read_blocktype(&m.types, &m.bytes, &mut it.idx)?;
+    let sig = Signature::read(&m.types, &m.bytes, &mut it.idx)?;
     vs.pop_vals(&sig.params)?;
     vs.push_ctrl(sig, ControlType::Loop)?;
     Ok(Action::Continue)
 }
 
 fn validate_if(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut ValidatorStack) -> Result<Action, Error> {
-    let sig = Signature::read_blocktype(&m.types, &m.bytes, &mut it.idx)?;
+    let sig = Signature::read(&m.types, &m.bytes, &mut it.idx)?;
     vs.pop_val_expect(ValType::I32)?;
     vs.pop_vals(&sig.params)?;
     let if_start = it.cur();
