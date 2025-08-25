@@ -91,10 +91,6 @@ pub struct Module {
     pub block_ends: HashMap<usize, usize>,
 }
 
-macro_rules! assert_not_empty {
-    ($it:expr) => { if $it.empty() { return Err(Malformed(UNEXPECTED_END)); } };
-}
-
 impl Module {
     pub const MAX_PAGES: u32 = 65536;
     pub const MAX_LOCALS: usize = 50000;
@@ -128,7 +124,7 @@ impl Module {
         // Check magic number and version
         if bytes.len() < 4 { return Err(Malformed(UNEXPECTED_END_SHORT)); }
         if &bytes[0..4] != MAGIC_HEADER {
-            return Err(Malformed(MAGIC_HEADER_NOT_DETECTED));
+            return Err(Malformed(NO_MAGIC_HEADER));
         }
         
         let mut it = ByteIter::new(bytes, 4);
@@ -166,7 +162,7 @@ impl Module {
         self.types.reserve_exact(n_types as usize);
 
         for _i in 0..n_types as usize {
-            assert_not_empty!(it);
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
             let byte = it.read_u8()?;
             if byte != 0x60 {
                 return Err(Malformed(INT_TOO_LONG));
@@ -193,8 +189,7 @@ impl Module {
                 if !is_val_type(ty) {
                     return Err(Malformed(INVALID_RESULT_TYPE));
                 }
-                sig.result = valtype_from_byte(ty).unwrap();
-                sig.result_count = 1;
+                sig.result = Some(valtype_from_byte(ty).unwrap());
             }
 
             self.types.push(sig);
@@ -207,7 +202,7 @@ impl Module {
         let n_imports: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
         for _ in 0..n_imports {
-            assert_not_empty!(it);
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
 
             // Module name
             let module_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
@@ -264,7 +259,7 @@ impl Module {
                     // Only 0x70 in 1.0 MVP
                     let reftype: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
                     if reftype != 0x70 {
-                        return Err(Malformed(MALFORMED_REFERENCE_TYPE));
+                        return Err(Malformed(MALFORMED_REF_TYPE));
                     }
                     let (min, max) = get_table_limits(bytes, it)?;
                     self.table = Some(Table { min, max, ty: ValType::F64, import });
@@ -301,7 +296,7 @@ impl Module {
         self.functions.reserve(n_functions as usize);
 
         for _ in 0..n_functions {
-            assert_not_empty!(it);
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
             let type_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             if (type_idx as usize) >= self.types.len() {
                 return Err(Validation(UNKNOWN_TYPE));
@@ -324,10 +319,10 @@ impl Module {
         }
 
         if n_tables == 1 {
-            assert_not_empty!(it);
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
             let elem_type = it.read_u8()?;
             if elem_type != 0x70 {
-                return Err(Validation(INVALID_TABLE_ELEM_TYPE));
+                return Err(Validation(INVALID_ELEM_TYPE));
             }
             let (min, max) = get_table_limits(bytes, it)?;
             self.table = Some(Table { min, max, ty: ValType::F64, import: None });
@@ -342,7 +337,7 @@ impl Module {
         }
 
         if n_memories == 1 {
-            assert_not_empty!(it);
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
             let (min, max) = get_memory_limits(bytes, it)?;
             self.memory = Some(Memory { min, max, import: None });
         }
@@ -353,7 +348,7 @@ impl Module {
         let n_globals: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
         for _ in 0..n_globals {
-            assert_not_empty!(it);
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
             let ty = it.read_u8()?;
             if !is_val_type(ty) {
                 return Err(Malformed(INVALID_GLOBAL_TYPE));
@@ -377,7 +372,7 @@ impl Module {
         let n_exports: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
         for _ in 0..n_exports {
-            assert_not_empty!(it);
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
 
             let name_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             let name_start = it.idx;
@@ -394,7 +389,7 @@ impl Module {
             let export_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
             if self.exports.contains_key(&name) {
-                return Err(Validation(DUPLICATE_EXPORT_NAME));
+                return Err(Validation(DUP_EXPORT_NAME));
             }
 
             match extern_type {
@@ -443,7 +438,7 @@ impl Module {
         self.element_start = it.cur();
 
         for _ in 0..n_elements {
-            assert_not_empty!(it);
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
             let flags: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             if flags != 0 {
                 return Err(Malformed(INVALID_VALUE_TYPE));
@@ -528,10 +523,10 @@ impl Module {
         let n_data_segments: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
         for _ in 0..n_data_segments {
-            assert_not_empty!(it);
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
             let segment_flag: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             if segment_flag != 0 {
-                return Err(Validation(INVALID_DATA_SEGMENT_FLAG));
+                return Err(Validation(INVALID_DATA_SEG_FLAG));
             }
             if self.memory.is_none() {
                 return Err(Validation(UNKNOWN_MEMORY));
@@ -615,7 +610,7 @@ where
             return Err(Malformed(SECTION_SIZE_MISMATCH));
         }
         if !it.empty() && it.peek_u8()? == id {
-            return Err(Malformed(JUNK_AFTER_LAST_SECTION));
+            return Err(Malformed(JUNK_AFTER_LAST));
         }
     } else if !it.empty() && it.peek_u8()? > 11 {
         return Err(Malformed(INVALID_SECTION_ID))
@@ -641,7 +636,7 @@ fn get_memory_limits(bytes: &[u8], it: &mut ByteIter) -> Result<(u32, u32), Erro
         return Err(Validation(MEMORY_SIZE_LIMIT));
     }
     if max < initial {
-        return Err(Validation(SIZE_MIN_GREATER_THAN_MAX));
+        return Err(Validation(MIN_GREATER_THAN_MAX));
     }
     Ok((initial, max))
 }
@@ -649,7 +644,7 @@ fn get_memory_limits(bytes: &[u8], it: &mut ByteIter) -> Result<(u32, u32), Erro
 fn get_table_limits(bytes: &[u8], it: &mut ByteIter) -> Result<(u32, u32), Error> {
     let (initial, max) = get_limits(bytes, it, u32::MAX)?;
     if max < initial {
-        return Err(Validation(SIZE_MIN_GREATER_THAN_MAX));
+        return Err(Validation(MIN_GREATER_THAN_MAX));
     }
     Ok((initial, max))
 }
