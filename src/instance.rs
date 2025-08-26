@@ -1,4 +1,5 @@
 use crate::signature::*;
+use crate::wasm_memory::WasmMemory;
 
 #[derive(Copy, Clone, Default)]
 pub struct WasmValue(pub u64);

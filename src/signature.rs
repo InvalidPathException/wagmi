@@ -34,10 +34,10 @@ pub struct Signature {
 
 impl Signature {
     pub fn read(types: &[Signature], bytes: &[u8], idx: &mut usize) -> Result<Signature, Error> {
-        const EMPTY_TYPE: u8 = 0x40;
+        const VOID: u8 = 0x40;
         if *idx >= bytes.len() { return Err(Error::Malformed(UNEXPECTED_END)); }
         let byte = bytes[*idx];
-        if byte == EMPTY_TYPE {
+        if byte == VOID {
             *idx += 1;
             Ok(Signature::default())
         } else if let Some(vt) = val_type_from_byte(byte) {

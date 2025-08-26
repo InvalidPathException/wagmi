@@ -1,4 +1,9 @@
-#![deny(unsafe_code)]
+
+#![allow(unsafe_code)]
+pub mod wasm_memory;
+
+#[deny(unsafe_code)]
+use crate::wasm_memory::{WasmMemory};
 pub mod module;
 pub mod signature;
 mod leb128;
