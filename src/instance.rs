@@ -1,3 +1,8 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::{Rc, Weak};
+use crate::error::*;
+use crate::Module;
 use crate::signature::*;
 use crate::wasm_memory::WasmMemory;
 
@@ -56,4 +61,223 @@ impl RuntimeType {
         if let Some(res) = sig.result { set_type_bit!(bits, res); }
         RuntimeType(bits)
     }
+}
+
+#[derive(Debug)]
+struct FuncRef {
+    handle: u64,
+}
+
+impl FuncRef {
+    const NULL: Self = Self { handle: 0 };
+
+    fn new(owner_id: u32, func_idx: u32) -> Self {
+        if owner_id == 0 || func_idx == u32::MAX {
+            return Self::NULL;
+        }
+        // Try to increment refcount, but don't fail if thread local is gone
+        let _ = INSTANCE_MANAGER.try_with(|mgr| {
+            mgr.borrow_mut().inc_ref(owner_id);
+        });
+        Self {
+            handle: ((owner_id as u64) << 32) | ((func_idx as u64) + 1)
+        }
+    }
+
+    fn from_raw(handle: u64) -> Self {
+        if handle != 0 {
+            let owner_id = (handle >> 32) as u32;
+            // Try to increment refcount, but don't fail if thread local is gone
+            let _ = INSTANCE_MANAGER.try_with(|mgr| {
+                mgr.borrow_mut().inc_ref(owner_id);
+            });
+        }
+        Self { handle }
+    }
+
+    fn as_raw(&self) -> u64 { self.handle }
+    fn owner_id(&self) -> u32 { (self.handle >> 32) as u32 }
+}
+
+impl Clone for FuncRef {
+    fn clone(&self) -> Self {
+        if self.handle != 0 {
+            // Use try_with to avoid panicking if thread local is destroyed
+            let _ = INSTANCE_MANAGER.try_with(|mgr| {
+                mgr.borrow_mut().inc_ref(self.owner_id());
+            });
+        }
+        Self { handle: self.handle }
+    }
+}
+
+impl Drop for FuncRef {
+    fn drop(&mut self) {
+        if self.handle != 0 {
+            // Use try_with to avoid panicking if thread local is destroyed
+            let _ = INSTANCE_MANAGER.try_with(|mgr| {
+                mgr.borrow_mut().dec_ref(self.owner_id());
+            });
+        }
+    }
+}
+
+impl Default for FuncRef {
+    fn default() -> Self { Self::NULL }
+}
+
+/// Manages instance registry and reference counting
+struct InstanceManager {
+    registry: HashMap<u32, Weak<Instance>>,
+    refcounts: HashMap<u32, usize>,
+    next_id: u32,
+    /// Instances that failed to instantiate but have live funcref references
+    /// These are kept alive until their refcount drops to zero
+    zombie_instances: HashMap<u32, Rc<Instance>>,
+}
+
+impl InstanceManager {
+    fn new() -> Self {
+        Self {
+            registry: HashMap::new(),
+            refcounts: HashMap::new(),
+            next_id: 1,
+            zombie_instances: HashMap::new(),
+        }
+    }
+
+    fn with<R>(f: impl FnOnce(&mut InstanceManager) -> R) -> R {
+        INSTANCE_MANAGER.with(|mgr| f(&mut mgr.borrow_mut()))
+    }
+
+    fn allocate_id(&mut self) -> u32 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    fn register_instance(&mut self, inst: &Rc<Instance>) {
+        self.registry.insert(inst.id, Rc::downgrade(inst));
+    }
+
+    fn get_instance(&self, id: u32) -> Option<Rc<Instance>> {
+        // First check if it's a zombie instance (failed instantiation but has live refs)
+        if let Some(zombie) = self.zombie_instances.get(&id) {
+            return Some(zombie.clone());
+        }
+        // Otherwise check the normal registry
+        self.registry.get(&id).and_then(|w| w.upgrade())
+    }
+
+    fn inc_ref(&mut self, owner_id: u32) {
+        *self.refcounts.entry(owner_id).or_insert(0) += 1;
+    }
+
+    fn dec_ref(&mut self, owner_id: u32) {
+        if let Some(count) = self.refcounts.get_mut(&owner_id) {
+            if *count > 0 {
+                *count -= 1;
+                // If refcount drops to zero, remove any zombie instance
+                if *count == 0 {
+                    self.zombie_instances.remove(&owner_id);
+                }
+            }
+        }
+    }
+
+    fn has_refs(&self, owner_id: u32) -> bool {
+        self.refcounts.get(&owner_id).copied().unwrap_or(0) > 0
+    }
+
+    fn add_zombie(&mut self, inst: Rc<Instance>) {
+        if self.has_refs(inst.id) {
+            self.zombie_instances.insert(inst.id, inst);
+        }
+    }
+}
+
+thread_local! {
+    static INSTANCE_MANAGER: RefCell<InstanceManager> = RefCell::new(InstanceManager::new());
+}
+
+pub struct WasmTable {
+    elements: Vec<FuncRef>,  // Changed to FuncRef for automatic refcounting
+    pub current: u32,
+    pub maximum: u32,
+}
+
+impl WasmTable {
+    pub fn new(initial: u32, maximum: u32) -> Self {
+        let mut elements = Vec::new();
+        elements.resize(initial as usize, FuncRef::default());
+        Self { elements, current: initial, maximum }
+    }
+    pub fn size(&self) -> u32 { self.current }
+    pub fn max(&self) -> u32 { self.maximum }
+    pub fn grow(&mut self, delta: u32, value: WasmValue) -> u32 {
+        if delta == 0 { return self.current; }
+        if delta > self.maximum.saturating_sub(self.current) { return u32::MAX; }
+        let new_current = self.current + delta;
+        let func_ref = FuncRef::from_raw(value.as_u64());
+        self.elements.resize(new_current as usize, func_ref);
+        let old = self.current;
+        self.current = new_current;
+        old
+    }
+    pub fn get(&self, idx: u32) -> Result<WasmValue, &'static str> {
+        let i = idx as usize;
+        if i >= self.elements.len() { return Err(OOB_TABLE_ACCESS); }
+        Ok(WasmValue::from_u64(self.elements[i].as_raw()))
+    }
+    pub fn set(&mut self, idx: u32, value: WasmValue) -> Result<(), &'static str> {
+        let i = idx as usize;
+        if i >= self.elements.len() { return Err(OOB_TABLE_ACCESS); }
+        // FuncRef handles refcounting automatically via Drop/Clone
+        self.elements[i] = FuncRef::from_raw(value.as_u64());
+        Ok(())
+    }
+}
+
+pub struct WasmGlobal {
+    pub ty: ValType,
+    pub mutable: bool,
+    pub value: WasmValue,
+}
+
+// --------------- Imports/Exports and Functions ---------------
+
+#[derive(Clone)]
+pub struct FunctionInfo {
+    pub ty: RuntimeType,
+    pub wasm_fn: Option<usize>,
+    pub locals_count: usize,
+    pub host: Option<Rc<dyn Fn(&mut [WasmValue])>>,
+    // If present, this function represents an external/cross-instance
+    // function owned by another instance. The owner is referenced weakly
+    // to avoid cycles. When invoked, execution should occur in the owning
+    // instance context using the stored index.
+    pub owner: Option<Weak<Instance>>,
+    pub owner_index: Option<usize>,
+}
+
+#[derive(Clone)]
+pub enum ExportValue {
+    Function(FunctionInfo),
+    Table(Rc<RefCell<WasmTable>>),
+    Memory(Rc<RefCell<WasmMemory>>),
+    Global(Rc<RefCell<WasmGlobal>>),
+}
+
+pub type Exports = HashMap<String, ExportValue>;
+pub type ModuleImports = HashMap<String, ExportValue>;
+pub type Imports = HashMap<String, ModuleImports>;
+
+pub struct Instance {
+    pub id: u32,
+    pub module: Rc<Module>,
+    pub memory: Option<Rc<RefCell<WasmMemory>>>,
+    pub tables: Vec<Rc<RefCell<WasmTable>>>,
+    pub globals: Vec<Rc<RefCell<WasmGlobal>>>,
+    pub functions: Vec<FunctionInfo>,
+    pub exports: Exports,
 }
