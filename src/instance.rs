@@ -2,7 +2,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use crate::error::*;
+use crate::leb128::{read_leb128, read_sleb128};
 use crate::Module;
+use crate::module::ExternType;
 use crate::signature::*;
 use crate::wasm_memory::WasmMemory;
 
@@ -272,12 +274,19 @@ pub type Exports = HashMap<String, ExportValue>;
 pub type ModuleImports = HashMap<String, ExportValue>;
 pub type Imports = HashMap<String, ModuleImports>;
 
+struct ControlFrame {
+    stack_len: usize,
+    dest_pc: usize,
+    arity: u32,
+    has_result: bool,
+}
+
 #[derive(Default)]
 pub struct Instance {
     pub id: u32,
     pub module: Rc<Module>,
     pub memory: Option<Rc<RefCell<WasmMemory>>>,
-    pub tables: Vec<Rc<RefCell<WasmTable>>>,
+    pub table: Option<Rc<RefCell<WasmTable>>>,
     pub globals: Vec<Rc<RefCell<WasmGlobal>>>,
     pub functions: Vec<FunctionInfo>,
     pub exports: Exports,
@@ -287,5 +296,378 @@ impl Instance {
     pub fn new(module: Rc<Module>) -> Self {
         // Other than the validated module, everything starts empty
         Self { module, ..Default::default() }
+    }
+
+    pub fn instantiate(module: Rc<Module>, imports: &Imports) -> Result<Self, Error> {
+        // Build the instance inside a Rc so we can register a Weak handle
+        // for cross-instance func_ref dispatch even if instantiation ultimately fails.
+        let mut inst_rc = Rc::new(Instance::new(module.clone()));
+        {
+            // Configure the instance while we hold the only strong Rc
+            let inst = Rc::get_mut(&mut inst_rc).expect("sole owner expected");
+            inst.id = InstanceManager::with(|mgr| mgr.allocate_id());
+
+            // Memory
+            if let Some(memory) = &module.memory {
+                if let Some(import_ref) = memory.import.clone() {
+                    let module = import_ref.module;
+                    let field = import_ref.field;
+                    let imported = imports.get(&module).and_then(|m| m.get(&field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
+                    match imported {
+                        ExportValue::Memory(mem) => {
+                            let m = mem.borrow();
+                            if m.size() < memory.min || m.max() > memory.max { return Err(Error::Link(INCOMPATIBLE_IMPORT)); }
+                            drop(m);
+                            inst.memory = Some(mem.clone());
+                        }
+                        _ => return Err(Error::Link(INCOMPATIBLE_IMPORT)),
+                    }
+                } else {
+                    inst.memory = Some(Rc::new(RefCell::new(WasmMemory::new(memory.min, memory.max))));
+                }
+            }
+
+            // Tables
+            if let Some(table) = &module.table {
+                if let Some(import_ref) = table.import.clone() {
+                    let module = import_ref.module;
+                    let field = import_ref.field;
+                    let imported = imports.get(&module).and_then(|m| m.get(&field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
+                    match imported {
+                        ExportValue::Table(tab) => {
+                            let tb = tab.borrow();
+                            if tb.size() < table.min || tb.max() > table.max { return Err(Error::Link(INCOMPATIBLE_IMPORT)); }
+                            drop(tb);
+                            inst.table = Some(tab.clone());
+                        }
+                        _ => return Err(Error::Link(INCOMPATIBLE_IMPORT)),
+                    }
+                } else {
+                    inst.table = Some(Rc::new(RefCell::new(WasmTable::new(table.min, table.max))));
+                }
+            }
+
+            // Functions
+            inst.functions.reserve(module.functions.len());
+            for function in &module.functions {
+                if let Some(import_ref) = function.import.clone() {
+                    let module = import_ref.module;
+                    let field = import_ref.field;
+                    let imported = imports.get(&module).and_then(|m| m.get(&field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
+                    let ty = RuntimeType::from_signature(&function.ty);
+                    match imported {
+                        ExportValue::Function(f) => {
+                            if f.ty != ty { return Err(Error::Link(INCOMPATIBLE_IMPORT)); }
+                            inst.functions.push(f.clone());
+                        }
+                        _ => return Err(Error::Link(INCOMPATIBLE_IMPORT)),
+                    }
+                } else {
+                    let locals_count = function.locals.len().saturating_sub(function.ty.params.len());
+                    inst.functions.push(FunctionInfo { ty: RuntimeType::from_signature(&function.ty), wasm_fn: Some(function.body.start), locals_count, host: None, owner: None, owner_index: None });
+                }
+            }
+
+            // Globals
+            inst.globals.reserve(module.globals.len());
+            for g in &module.globals {
+                if let Some(import_ref) = g.import.clone() {
+                    let module = import_ref.module;
+                    let field = import_ref.field;
+                    let imported = imports.get(&module).and_then(|m| m.get(&field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
+                    match imported {
+                        ExportValue::Global(gl) => {
+                            let gb = gl.borrow();
+                            if gb.ty != g.ty || gb.mutable != g.is_mutable { return Err(Error::Link(INCOMPATIBLE_IMPORT)); }
+                            drop(gb);
+                            inst.globals.push(gl.clone());
+                        }
+                        _ => return Err(Error::Link(INCOMPATIBLE_IMPORT)),
+                    }
+                } else {
+                    // evaluate constant initializer
+                    let mut cpc = g.initializer_offset;
+                    let val = Instance::eval_const(&module, &mut cpc, &inst.globals)?;
+                    inst.globals.push(Rc::new(RefCell::new(WasmGlobal { ty: g.ty, mutable: g.is_mutable, value: val })));
+                }
+            }
+
+            let mut collected_elements: Option<Vec<(u32, Vec<u32>)>> = None;
+            if module.element_count > 0 {
+                if inst.table.is_none() { return Err(Error::Link(UNKNOWN_TABLE)); }
+                let bytes = &module.bytes;
+                let mut it = module.element_start;
+                let n_segments: u32 = module.element_count;
+                let mut collected: Vec<(u32, Vec<u32>)> = Vec::with_capacity(n_segments as usize);
+                for _ in 0..n_segments {
+                    let flags: u32 = read_leb128(bytes, &mut it)?;
+                    if flags != 0 { return Err(Error::Malformed(INVALID_VALUE_TYPE)); }
+                    let offset = Instance::eval_const(&module, &mut it, &inst.globals)?.as_u32();
+                    let n: u32 = read_leb128(bytes, &mut it)?;
+                    {
+                        let table_rc = inst.table.as_ref().ok_or(Error::Link(UNKNOWN_TABLE))?;
+                        let table_borrow = table_rc.borrow();
+                        if (offset as u64) + (n as u64) > table_borrow.size() as u64 {
+                            return Err(Error::Link(ELEM_SEG_DNF));
+                        }
+                    }
+                    let mut indices: Vec<u32> = Vec::with_capacity(n as usize);
+                    for _ in 0..n {
+                        let fn_index: u32 = read_leb128(bytes, &mut it)?;
+                        indices.push(fn_index);
+                    }
+                    collected.push((offset, indices));
+                }
+                collected_elements = Some(collected);
+            }
+
+            // Validate and collect data segments (no writes yet)
+            let mut pending_data: Option<Vec<(u32, Vec<u8>)>> = None;
+            if let Some(mem) = &inst.memory {
+                struct PendingData { offset: u32, bytes: Vec<u8> }
+                let mut pending: Vec<PendingData> = Vec::new();
+                for seg in &module.data_segments {
+                    let mut ip = seg.initializer_offset;
+                    let offset = Instance::eval_const(&module, &mut ip, &inst.globals)?.as_u32();
+                    let bytes_vec = module.bytes[seg.data_range.clone()].to_vec();
+                    let m = mem.borrow();
+                    let end = (offset as usize).saturating_add(bytes_vec.len());
+                    if end > (m.size() as usize) * (WasmMemory::PAGE_SIZE as usize) {
+                        return Err(Error::Link(DATA_SEG_DNF));
+                    }
+                    drop(m);
+                    pending.push(PendingData { offset, bytes: bytes_vec });
+                }
+                if !pending.is_empty() {
+                    pending_data = Some(pending.into_iter().map(|p| (p.offset, p.bytes)).collect());
+                }
+            }
+
+            // Apply element segments now that data segments have been validated
+            if let Some(collected) = collected_elements {
+                let table_rc = inst.table.as_ref().ok_or(Error::Link(UNKNOWN_TABLE))?.clone();
+                #[cfg(feature = "wasm_debug")]
+                {
+                    let sz = table_rc.borrow().size();
+                    crate::debug_println!("[elem] table size={} segments={} ", sz, collected.len());
+                }
+                for (offset, indices) in collected.iter() {
+                    for (j, idx_fn) in indices.iter().enumerate() {
+                        let fn_index = *idx_fn as usize;
+                        let f = inst.functions[fn_index].clone();
+                        let (owner_id, owner_fn_index) = if let (Some(weak_owner), Some(owner_idx)) = (f.owner.clone(), f.owner_index) {
+                            if let Some(owner_rc) = weak_owner.upgrade() { (owner_rc.id, owner_idx as u32) } else { (inst.id, fn_index as u32) }
+                        } else {
+                            (inst.id, fn_index as u32)
+                        };
+                        let func_ref = FuncRef::new(owner_id, owner_fn_index);
+                        let func_ref_value = WasmValue::from_u64(func_ref.as_raw());
+                        if table_rc.borrow_mut().set(*offset + (j as u32), func_ref_value).is_err() {
+                            return Err(Error::Link(ELEM_SEG_DNF));
+                        }
+                    }
+                }
+            }
+
+            // Apply data segments (writes), after elements
+            if let (Some(mem), Some(pending)) = (&inst.memory, pending_data) {
+                if !pending.is_empty() {
+                    let mut m = mem.borrow_mut();
+                    for (offset, bytes_vec) in pending.into_iter() {
+                        for (i, b) in bytes_vec.iter().enumerate() {
+                            m.store_u8(offset + i as u32, 0, *b).map_err(Error::Trap)?;
+                        }
+                    }
+                }
+            }
+
+            // Exports
+            for (name, ex) in &module.exports {
+                match ex.extern_type {
+                    ExternType::Func => { inst.exports.insert(name.clone(), ExportValue::Function(inst.functions[ex.idx as usize].clone())); }
+                    ExternType::Table => {
+                        if let Some(table) = &inst.table {
+                            inst.exports.insert(name.clone(), ExportValue::Table(table.clone()));
+                        }
+                    }
+                    ExternType::Mem => { if let Some(mem) = &inst.memory { inst.exports.insert(name.clone(), ExportValue::Memory(mem.clone())); } }
+                    ExternType::Global => { inst.exports.insert(name.clone(), ExportValue::Global(inst.globals[ex.idx as usize].clone())); }
+                }
+            }
+        }
+
+        // Register a weak reference before potential start execution so that
+        // even if start traps, func_refs already stored in tables can resolve
+        // the owning instance via the registry
+        InstanceManager::with(|mgr| mgr.register_instance(&inst_rc));
+
+        // Start
+        if module.start != u32::MAX {
+            let fi = module.start as usize;
+            let func_info = &inst_rc.functions[fi];
+            if func_info.ty.n_params() != 0 || func_info.ty.has_result() { return Err(Error::Validation(START_FUNC)); }
+            let mut stack = Vec::with_capacity(64);
+            let mut return_pc = 0usize;
+            let mut control: Vec<ControlFrame> = Vec::new();
+            let mut bases: Vec<usize> = Vec::new();
+            let mut ctrl_bases = vec![];
+            match inst_rc.call_function_index(fi, &mut return_pc, &mut stack, &mut control, &mut bases, &mut ctrl_bases) {
+                Ok(()) => {}
+                Err(Error::Trap(msg)) => {
+                    // If there are live func_ref references to this instance,
+                    // keep it alive as a zombie until all references are dropped
+                    InstanceManager::with(|mgr| mgr.add_zombie(inst_rc));
+                    return Err(Error::Uninstantiable(msg));
+                }
+                Err(e) => { return Err(e); }
+            }
+        }
+
+        // Success: unwrap Rc to return by value
+        match Rc::try_unwrap(inst_rc) {
+            Ok(inst) => Ok(inst),
+            Err(_) => unreachable!("unexpected extra strong refs while instantiating"),
+        }
+    }
+
+    fn eval_const(
+        module: &Module,
+        pc: &mut usize,
+        globals: &[Rc<RefCell<WasmGlobal>>]
+    ) -> Result<WasmValue, Error> {
+        let bytes = &module.bytes;
+        let mut stack: Vec<WasmValue> = Vec::new();
+        loop {
+            let op = bytes[*pc]; *pc += 1;
+            match op {
+                0x41 => { let v: i32 = read_sleb128(bytes, pc)?; stack.push(WasmValue::from_i32(v)); }
+                0x42 => { let v: i64 = read_sleb128(bytes, pc)?; stack.push(WasmValue::from_i64(v)); }
+                0x43 => { let bits = u32::from_le_bytes(bytes[*pc..*pc+4].try_into().unwrap()); *pc += 4; stack.push(WasmValue::from_f32_bits(bits)); }
+                0x44 => { let bits = u64::from_le_bytes(bytes[*pc..*pc+8].try_into().unwrap()); *pc += 8; stack.push(WasmValue::from_f64_bits(bits)); }
+                0x23 => { let gi: u32 = read_leb128(bytes, pc)?; let g = gi as usize; if g >= globals.len() { return Err(Error::Validation(UNKNOWN_GLOBAL)); } stack.push(globals[g].borrow().value); }
+                0x6a => { let b = stack.pop().unwrap().as_u32(); let a = stack.pop().unwrap().as_u32(); stack.push(WasmValue::from_u32(a.wrapping_add(b))); }
+                0x6b => { let b = stack.pop().unwrap().as_u32(); let a = stack.pop().unwrap().as_u32(); stack.push(WasmValue::from_u32(a.wrapping_sub(b))); }
+                0x6c => { let b = stack.pop().unwrap().as_u32(); let a = stack.pop().unwrap().as_u32(); stack.push(WasmValue::from_u32(a.wrapping_mul(b))); }
+                0x7c => { let b = stack.pop().unwrap().as_u64(); let a = stack.pop().unwrap().as_u64(); stack.push(WasmValue::from_u64(a.wrapping_add(b))); }
+                0x7d => { let b = stack.pop().unwrap().as_u64(); let a = stack.pop().unwrap().as_u64(); stack.push(WasmValue::from_u64(a.wrapping_sub(b))); }
+                0x7e => { let b = stack.pop().unwrap().as_u64(); let a = stack.pop().unwrap().as_u64(); stack.push(WasmValue::from_u64(a.wrapping_mul(b))); }
+                0x0b => break,
+                _ => return Err(Error::Validation(CONST_EXP_REQUIRED)),
+            }
+        }
+        Ok(stack.pop().unwrap())
+    }
+
+    #[inline]
+    fn setup_wasm_function_call(
+        func_info: &FunctionInfo,
+        stack: &mut Vec<WasmValue>,
+        control: &mut Vec<ControlFrame>,
+        fn_bases: &mut Vec<usize>,
+        ctrl_bases: &mut Vec<usize>,
+        return_dest: usize
+    ) -> Result<usize, Error> {
+        let n_params = func_info.ty.n_params() as usize;
+        let has_result = func_info.ty.has_result();
+        let locals_start = stack.len() - n_params;
+
+        // Allocate space for local variables
+        for _ in 0..func_info.locals_count {
+            stack.push(WasmValue::default());
+        }
+
+        // Push return target
+        control.push(ControlFrame {
+            stack_len: locals_start,
+            dest_pc: return_dest,
+            arity: if has_result { 1 } else { 0 },
+            has_result,
+        });
+
+        const MAX_CONTROL_DEPTH: usize = 1000;
+        if control.len() > MAX_CONTROL_DEPTH {
+            return Err(Error::Trap(STACK_EXHAUSTED));
+        }
+
+        // Track function frame bases
+        fn_bases.push(locals_start);
+        ctrl_bases.push(control.len() - 1);
+
+        // Return the function's start PC
+        Ok(func_info.wasm_fn.unwrap())
+    }
+
+
+    #[inline]
+    fn call_host_function(
+        host: &dyn Fn(&mut [WasmValue]),
+        ty: RuntimeType,
+        stack: &mut Vec<WasmValue>,
+        params_start: usize,
+    ) {
+        let n_params = ty.n_params() as usize;
+        let has_result = ty.has_result();
+
+        // Buffer size: need space for params, or at least 1 for result-only functions
+        let buffer_size = n_params.max(if has_result && n_params == 0 { 1 } else { 0 });
+
+        const STACK_THRESHOLD: usize = 8;
+        let mut small_buffer;
+        let mut large_buffer;
+
+        let buffer = if buffer_size <= STACK_THRESHOLD {
+            small_buffer = [WasmValue::default(); STACK_THRESHOLD];
+            &mut small_buffer[..buffer_size]
+        } else {
+            large_buffer = vec![WasmValue::default(); buffer_size];
+            &mut large_buffer[..]
+        };
+
+        if n_params > 0 {
+            buffer[..n_params].copy_from_slice(&stack[params_start..params_start + n_params]);
+        }
+
+        host(buffer);
+        stack.truncate(params_start);
+        if has_result {
+            stack.push(buffer[0]);
+        }
+    }
+
+    fn call_function_index(
+        &self,
+        idx: usize,
+        return_pc: &mut usize,
+        stack: &mut Vec<WasmValue>,
+        control: &mut Vec<ControlFrame>,
+        fn_bases: &mut Vec<usize>,
+        ctrl_bases: &mut Vec<usize>
+    ) -> Result<(), Error> {
+        const MAX_CALL_DEPTH: usize = 1000;
+        if fn_bases.len() >= MAX_CALL_DEPTH {
+            return Err(Error::Trap(STACK_EXHAUSTED));
+        }
+        let fi = &self.functions[idx];
+        if fi.wasm_fn.is_some() {
+            let pc_start = Self::setup_wasm_function_call(fi, stack, control, fn_bases, ctrl_bases, *return_pc)?;
+            self.interpret(pc_start, stack, control, fn_bases, ctrl_bases)?;
+        } else if let Some(host) = &fi.host {
+            let params_start = stack.len() - fi.ty.n_params() as usize;
+            Self::call_host_function(host.as_ref(), fi.ty, stack, params_start);
+        } else {
+            return Err(Error::Trap(FUNC_NO_IMPL));
+        }
+        Ok(())
+    }
+
+    fn interpret(
+        &self,
+        mut pc: usize,
+        stack: &mut Vec<WasmValue>,
+        control: &mut Vec<ControlFrame>,
+        fn_bases: &mut Vec<usize>,
+        ctrl_bases: &mut Vec<usize>
+    ) -> Result<(), Error> {
+        Ok(())
     }
 }

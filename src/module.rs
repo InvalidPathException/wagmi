@@ -106,8 +106,8 @@ impl Module {
     }
 
     fn initialize(&mut self) -> Result<(), Error> {
-        let bytes_arc = self.bytes.clone();
-        let bytes: &[u8] = &bytes_arc[..];
+        // Copy to get around borrow checker
+        let bytes: &[u8] = &self.bytes.clone()[..];
         
         // Check magic number and version
         if bytes.len() < 4 { return Err(Malformed(UNEXPECTED_END_SHORT)); }
