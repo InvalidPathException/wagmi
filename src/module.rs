@@ -71,6 +71,7 @@ pub struct DataSegment { pub data_range: std::ops::Range<usize>, pub initializer
 pub struct IfJump { pub else_offset: usize, pub end_offset: usize }
 
 // ---------------- Module Structure ----------------
+#[derive(Default)]
 pub struct Module {
     pub bytes: Rc<Vec<u8>>,
     pub types: Vec<Signature>,
@@ -94,22 +95,11 @@ impl Module {
     pub const MAX_LOCALS: usize = 50000;
 
     pub fn compile(bytes: Vec<u8>) -> Result<Self, Error> {
+        // Other than bytecode and default start cursor, everything starts as empty/None
         let mut m = Module {
             bytes: Rc::new(bytes),
-            types: Vec::new(),
-            imports: HashMap::new(),
-            table: None,
-            memory: None,
-            globals: Vec::new(),
-            exports: HashMap::new(),
             start: u32::MAX,
-            element_start: 0,
-            element_count: 0,
-            functions: Vec::new(),
-            n_data: 0,
-            data_segments: Vec::new(),
-            if_jumps: HashMap::new(),
-            block_ends: HashMap::new(),
+            ..Default::default()
         };
         m.initialize()?;
         Ok(m)

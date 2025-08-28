@@ -272,6 +272,7 @@ pub type Exports = HashMap<String, ExportValue>;
 pub type ModuleImports = HashMap<String, ExportValue>;
 pub type Imports = HashMap<String, ModuleImports>;
 
+#[derive(Default)]
 pub struct Instance {
     pub id: u32,
     pub module: Rc<Module>,
@@ -280,4 +281,11 @@ pub struct Instance {
     pub globals: Vec<Rc<RefCell<WasmGlobal>>>,
     pub functions: Vec<FunctionInfo>,
     pub exports: Exports,
+}
+
+impl Instance {
+    pub fn new(module: Rc<Module>) -> Self {
+        // Other than the validated module, everything starts empty
+        Self { module, ..Default::default() }
+    }
 }
