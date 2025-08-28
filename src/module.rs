@@ -40,33 +40,29 @@ pub struct Function {
 }
 
 #[derive(Clone)]
-pub struct Table { 
-    pub min: u32, 
-    pub max: u32, 
-    pub ty: ValType, 
+pub struct Table {
+    pub min: u32,
+    pub max: u32,
     pub import: Option<ImportRef>
 }
 
 #[derive(Clone)]
-pub struct Memory { 
-    pub min: u32, 
-    pub max: u32, 
+pub struct Memory {
+    pub min: u32,
+    pub max: u32,
     pub import: Option<ImportRef>
 }
 
 #[derive(Clone)]
-pub struct Global { 
-    pub ty: ValType, 
-    pub is_mutable: bool, 
-    pub initializer_offset: usize, 
+pub struct Global {
+    pub ty: ValType,
+    pub is_mutable: bool,
+    pub initializer_offset: usize,
     pub import: Option<ImportRef>
 }
 
 #[derive(Clone)]
 pub struct Export { pub extern_type: ExternType, pub idx: u32 }
-
-#[derive(Clone)]
-pub struct Element { pub ty: ValType }
 
 #[derive(Clone)]
 pub struct DataSegment { pub data_range: std::ops::Range<usize>, pub initializer_offset: usize }
@@ -85,7 +81,7 @@ pub struct Module {
     pub exports: HashMap<String, Export>,
     pub start: u32,
     pub element_start: usize,
-    pub elements: Vec<Element>,
+    pub element_count: u32,
     pub functions: Vec<Function>,
     pub n_data: u32,
     pub data_segments: Vec<DataSegment>,
@@ -108,7 +104,7 @@ impl Module {
             exports: HashMap::new(),
             start: u32::MAX,
             element_start: 0,
-            elements: Vec::new(),
+            element_count: 0,
             functions: Vec::new(),
             n_data: 0,
             data_segments: Vec::new(),
@@ -147,14 +143,14 @@ impl Module {
         section(&mut it, bytes, 9, |it: &mut ByteIter| { self.parse_element_section(bytes, it) })?;
         section(&mut it, bytes, 10, |it: &mut ByteIter| { self.parse_code_section(bytes, it) })?;
         section(&mut it, bytes, 11, |it: &mut ByteIter| { self.parse_data_section(bytes, it) })?;
-        
+
         // Check that all non-imported functions have code
         for func in &self.functions {
             if func.import.is_none() && func.body.start == 0 && func.body.end == 0 {
                 return Err(Malformed(FUNC_CODE_INCONSISTENT));
             }
         }
-        
+
         if !it.empty() { return Err(Malformed(LENGTH_OUT_OF_BOUNDS)); }
         Ok(())
     }
@@ -164,7 +160,7 @@ impl Module {
         self.types.reserve_exact(n_types as usize);
 
         for _i in 0..n_types as usize {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
             let byte = it.read_u8()?;
             if byte != 0x60 {
                 return Err(Malformed(INT_TOO_LONG));
@@ -204,7 +200,7 @@ impl Module {
         let n_imports: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
         for _ in 0..n_imports {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
 
             // Module name
             let module_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
@@ -260,7 +256,7 @@ impl Module {
                         return Err(Malformed(MALFORMED_REF_TYPE));
                     }
                     let (min, max) = get_table_limits(bytes, it)?;
-                    self.table = Some(Table { min, max, ty: ValType::F64, import });
+                    self.table = Some(Table { min, max, import });
                 }
                 ExternType::Mem => {
                     if self.memory.is_some() {
@@ -293,7 +289,7 @@ impl Module {
         self.functions.reserve(n_functions as usize);
 
         for _ in 0..n_functions {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
             let type_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             if (type_idx as usize) >= self.types.len() {
                 return Err(Validation(UNKNOWN_TYPE));
@@ -316,13 +312,13 @@ impl Module {
         }
 
         if n_tables == 1 {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
             let elem_type = it.read_u8()?;
             if elem_type != 0x70 {
                 return Err(Validation(INVALID_ELEM_TYPE));
             }
             let (min, max) = get_table_limits(bytes, it)?;
-            self.table = Some(Table { min, max, ty: ValType::F64, import: None });
+            self.table = Some(Table { min, max, import: None });
         }
         Ok(())
     }
@@ -334,7 +330,7 @@ impl Module {
         }
 
         if n_memories == 1 {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
             let (min, max) = get_memory_limits(bytes, it)?;
             self.memory = Some(Memory { min, max, import: None });
         }
@@ -345,7 +341,7 @@ impl Module {
         let n_globals: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
         for _ in 0..n_globals {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
             let ty = it.read_u8()?;
             if !is_val_type(ty) {
                 return Err(Malformed(INVALID_GLOBAL_TYPE));
@@ -368,15 +364,14 @@ impl Module {
         let n_exports: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
         for _ in 0..n_exports {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
 
             let name_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             let name_start = it.idx;
             if name_start + name_len as usize > bytes.len() {
                 return Err(Malformed(UNEXPECTED_END));
             }
-            let name = String::from_utf8(bytes[name_start..name_start + name_len as usize].to_vec())
-                .map_err(|_| Malformed(INVALID_UTF8))?;
+            let name = String::from_utf8(bytes[name_start..name_start + name_len as usize].to_vec()).unwrap();
             it.idx = name_start + name_len as usize;
 
             let byte = it.read_u8()?;
@@ -433,9 +428,10 @@ impl Module {
     fn parse_element_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
         let n_elements: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
         self.element_start = it.cur();
+        self.element_count = n_elements;
 
         for _ in 0..n_elements {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
             let flags: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             if flags != 0 {
                 return Err(Malformed(INVALID_VALUE_TYPE));
@@ -453,7 +449,6 @@ impl Module {
                 }
                 self.functions[elem_idx as usize].is_declared = true;
             }
-            self.elements.push(Element { ty: ValType::F64 });
         }
         Ok(())
     }
@@ -520,7 +515,7 @@ impl Module {
         let n_data_segments: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
         for _ in 0..n_data_segments {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); } 
+            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
             let segment_flag: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             if segment_flag != 0 {
                 return Err(Validation(INVALID_DATA_SEG_FLAG));
@@ -600,8 +595,8 @@ where
         it.advance(1);
         let section_length: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
         let section_start = it.cur();
-        if section_start + section_length as usize > bytes.len() { 
-            return Err(Malformed(UNEXPECTED_END)); 
+        if section_start + section_length as usize > bytes.len() {
+            return Err(Malformed(UNEXPECTED_END));
         }
         reader(it)?;
         if it.cur() - section_start != section_length as usize {
