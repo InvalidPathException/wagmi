@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
+use paste::paste;
 use crate::error::*;
 use crate::leb128::{read_leb128, read_sleb128};
 use crate::Module;
@@ -883,9 +884,524 @@ impl Instance {
             if pc >= bytes.len() { return Err(Error::Malformed(UNEXPECTED_END)); }
             let byte = next_op!();
             match byte {
-                _ => { break; },
+                0x00 => return Err(Error::Trap(UNREACHABLE)),
+                0x01 | 0xbc | 0xbd | 0xbe | 0xbf => {} // nop and reinterprets (no-op on raw bits)
+                0x02 => { // block
+                    let sig = Signature::read(&self.module.types, bytes, &mut pc)?;
+                    crate::debug_println!("[ctrl] enter block: pc_after_bt={} (0x{:x})", pc, pc);
+                    debug_assert!(self.module.block_ends.contains_key(&pc), "missing block end mapping for key {}", pc);
+                    let block_end = *self.module.block_ends.get(&pc).unwrap();
+                    crate::debug_println!("[ctrl]   block_end={} (0x{:x})", block_end, block_end);
+                    control.push(ControlFrame {
+                        stack_len: stack.len() - sig.params.len(),
+                        dest_pc: block_end,
+                        arity: sig.result.is_some() as u32,
+                        has_result: sig.result.is_some()
+                    });
+                }
+                0x03 => { // loop
+                    let loop_op_pc = pc - 1;
+                    let sig = Signature::read(&self.module.types, bytes, &mut pc)?;
+                    crate::debug_println!("[ctrl] enter loop: loop_op_pc={} (0x{:x}) pc_after_bt={} (0x{:x})", loop_op_pc, loop_op_pc, pc, pc);
+                    control.push(ControlFrame {
+                        stack_len: stack.len() - sig.params.len(),
+                        dest_pc: loop_op_pc,
+                        arity: sig.params.len() as u32,
+                        has_result: sig.result.is_some()
+                    });
+                }
+                0x04 => { // if
+                    let sig = Signature::read(&self.module.types, bytes, &mut pc)?;
+                    let cond = pop_val!().as_u32();
+                    crate::debug_println!("[ctrl] enter if: pc_after_bt={} (0x{:x}) cond={}", pc, pc, cond);
+                    debug_assert!(self.module.if_jumps.contains_key(&pc), "missing if jump mapping for key {}", pc);
+                    let ifjump = self.module.if_jumps.get(&pc).unwrap();
+                    crate::debug_println!("[ctrl]   else_offset={} (0x{:x}) end_offset={} (0x{:x})", ifjump.else_offset, ifjump.else_offset, ifjump.end_offset, ifjump.end_offset);
+                    control.push(ControlFrame {
+                        stack_len: stack.len() - sig.params.len(),
+                        dest_pc: ifjump.end_offset,
+                        arity: sig.result.is_some() as u32,
+                        has_result: sig.result.is_some()
+                    });
+                    if cond == 0 { pc = ifjump.else_offset; }
+                }
+                0x05 => { // else
+                    crate::debug_println!("[ctrl] else: simulating br depth 0");
+                    let _ = Instance::branch(&mut pc, stack, control, 0);
+                }
+                0x0b => { // end
+                    crate::debug_println!("[ctrl] end: control_depth={}", control.len());
+                    
+                    // Handle function frame end - special case
+                    if let Some(&frame_idx) = ctrl_bases.last() {
+                        if frame_idx == control.len().saturating_sub(1) {
+                            if Instance::branch(&mut pc, stack, control, 0) {
+                                ctrl_bases.pop();
+                                let _ = fn_bases.pop();
+                                return Ok(());
+                            }
+                            ctrl_bases.pop();
+                            let _ = fn_bases.pop();
+                        }
+                    }
+
+                    let Some(target) = control.pop() else {
+                        return Ok(());
+                    };
+
+                    if target.has_result {
+                        let result = stack[stack.len() - 1];
+                        stack.truncate(target.stack_len);
+                        stack.push(result);
+                    } else {
+                        stack.truncate(target.stack_len);
+                    }
+                }
+                0x0c => { // br
+                    let depth: u32 = read_leb128(bytes, &mut pc)?;
+                    if Instance::branch(&mut pc, stack, control, depth) { return Ok(()); }
+                }
+                0x0d => { // br_if
+                    let depth: u32 = read_leb128(bytes, &mut pc)?;
+                    let cond = pop_val!().as_u32();
+                    if cond != 0 && Instance::branch(&mut pc, stack, control, depth) { return Ok(()); }
+                }
+                0x0e => { // br_table
+                    let v = pop_val!().as_u32();
+                    let n_targets: u32 = read_leb128(bytes, &mut pc)?;
+                    let mut depth = u32::MAX;
+                    for i in 0..n_targets {
+                        let t: u32 = read_leb128(bytes, &mut pc)?;
+                        if i == v { depth = t; }
+                    }
+                    let default_t: u32 = read_leb128(bytes, &mut pc)?;
+                    if depth == u32::MAX { depth = default_t; }
+                    if Instance::branch(&mut pc, stack, control, depth) { return Ok(()); }
+                }
+                0x0f => { // return
+                    if control.is_empty() { return Ok(()); }
+                    let base_idx = *ctrl_bases.last().unwrap();
+                    let depth = (control.len() - 1).saturating_sub(base_idx) as u32;
+                    if Instance::branch(&mut pc, stack, control, depth) {
+                        ctrl_bases.pop();
+                        let _ = fn_bases.pop();
+                        return Ok(());
+                    }
+                    ctrl_bases.pop();
+                    let _ = fn_bases.pop();
+                }
+                // Call instructions
+                0x10 => { // call
+                    let fi: u32 = read_leb128(bytes, &mut pc)?;
+                    let f = &self.functions[fi as usize];
+
+                    if let (Some(owner_weak), Some(owner_idx)) = (&f.owner, f.owner_index) {
+                        if let Some(owner_rc) = owner_weak.upgrade() {
+                            let n_params = f.ty.n_params() as usize;
+                            let params_start = stack.len() - n_params;
+                            let mut tmp_stack: Vec<WasmValue> = vec![WasmValue::default(); n_params];
+                            tmp_stack[..n_params].copy_from_slice(&stack[params_start..(n_params + params_start)]);
+                            stack.truncate(params_start);
+                            let mut control_nested: Vec<ControlFrame> = Vec::new();
+                            let mut ret_pc_nested = 0usize;
+                            let mut fn_bases_nested: Vec<usize> = Vec::new();
+                            let mut ctrl_bases_nested = vec![];
+                            owner_rc.call_function_index(owner_idx, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut fn_bases_nested, &mut ctrl_bases_nested)?;
+                            for v in tmp_stack { stack.push(v); }
+                        } else {
+                            return Err(Error::Trap(FUNC_NO_IMPL));
+                        }
+                    } else if f.wasm_fn.is_some() {
+                        pc = Self::setup_wasm_function_call(f, stack, control, fn_bases, ctrl_bases, pc)?;
+                    } else if let Some(host) = &f.host {
+                        let params_start = stack.len() - f.ty.n_params() as usize;
+                        Self::call_host_function(host.as_ref(), f.ty, stack, params_start);
+                    } else {
+                        return Err(Error::Trap(FUNC_NO_IMPL));
+                    }
+                }
+                0x11 => { // call_indirect
+                    let type_idx: u32 = read_leb128(bytes, &mut pc)?;
+                    pc += 1; // Skip the zero flag
+                    let table_idx: u32 = 0;
+                    let elem_idx = match stack.pop() {
+                        Some(v) => v.as_u32(),
+                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                    };
+                    let table_rc = match self.table.as_ref() {
+                        Some(t) => t.clone(),
+                        None => return Err(Error::Trap(UNDEF_ELEM))
+                    };
+                    let func_ref = {
+                        let table_borrow = table_rc.borrow();
+                        if elem_idx >= table_borrow.size() {
+                            return Err(Error::Trap(UNDEF_ELEM));
+                        }
+                        table_borrow.get(elem_idx).map_err(Error::Trap)?
+                    };
+                    let handle = func_ref.as_u64();
+                    if handle == 0 {
+                        return Err(Error::Trap(UNINITIALIZED_ELEM));
+                    }
+
+                    let owner_id: u32 = (handle >> 32) as u32;
+                    let low: u32 = (handle & 0xFFFF_FFFF) as u32;
+                    if low == 0 {
+                        return Err(Error::Trap(FUNC_NO_IMPL));
+                    }
+                    let fn_index = (low - 1) as usize;
+                    let expected = RuntimeType::from_signature(&self.module.types[type_idx as usize]);
+
+                    if owner_id != self.id {
+                        let mut dispatched = false;
+                        let mut sig_ok = false;
+                        InstanceManager::with(|mgr| {
+                            if let Some(owner) = mgr.get_instance(owner_id) {
+                                let callee = &owner.functions[fn_index];
+                                sig_ok = callee.ty == expected;
+                                if sig_ok {
+                                    let n_params = callee.ty.n_params() as usize;
+                                    let params_start = stack.len() - n_params;
+                                    let mut tmp_stack: Vec<WasmValue> = Vec::with_capacity(n_params);
+                                    for i in 0..n_params { tmp_stack.push(stack[params_start + i]); }
+                                    stack.truncate(params_start);
+                                    let mut control_nested: Vec<ControlFrame> = Vec::new();
+                                    let mut ret_pc_nested = 0usize;
+                                    let mut fn_bases_nested: Vec<usize> = Vec::new();
+                                    let mut ctrl_bases_nested = vec![];
+                                    match owner.call_function_index(fn_index, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut fn_bases_nested, &mut ctrl_bases_nested) {
+                                        Ok(()) => {
+                                            for v in tmp_stack { stack.push(v); }
+                                            dispatched = true;
+                                        }
+                                        Err(_e) => {}
+                                    }
+                                }
+                            }
+                        });
+                        if !sig_ok {
+                            return Err(Error::Trap(INDIRECT_CALL_MISMATCH));
+                        }
+                        if dispatched {
+                            continue;
+                        } else {
+                            return Err(Error::Trap(FUNC_NO_IMPL));
+                        }
+                    }
+
+                    let callee = self.functions[fn_index].clone();
+                    if callee.ty != expected {
+                        return Err(Error::Trap(INDIRECT_CALL_MISMATCH));
+                    }
+
+                    if let (Some(owner_weak), Some(owner_idx)) = (&callee.owner, callee.owner_index) {
+                        if let Some(owner_rc) = owner_weak.upgrade() {
+                            let n_params = callee.ty.n_params() as usize;
+                            let params_start = stack.len() - n_params;
+                            let mut tmp_stack: Vec<WasmValue> = Vec::with_capacity(n_params);
+                            for i in 0..n_params { tmp_stack.push(stack[params_start + i]); }
+                            stack.truncate(params_start);
+                            let mut control_nested: Vec<ControlFrame> = Vec::new();
+                            let mut ret_pc_nested = 0usize;
+                            let mut fn_bases_nested: Vec<usize> = Vec::new();
+                            let mut ctrl_bases_nested = vec![];
+                            owner_rc.call_function_index(owner_idx, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut fn_bases_nested, &mut ctrl_bases_nested)?;
+                            for v in tmp_stack { stack.push(v); }
+                        } else {
+                            return Err(Error::Trap(FUNC_NO_IMPL));
+                        }
+                    } else if callee.wasm_fn.is_some() {
+                        pc = Self::setup_wasm_function_call(&callee, stack, control, fn_bases, ctrl_bases, pc)?;
+                    } else if let Some(host) = &callee.host {
+                        let params_start = stack.len() - callee.ty.n_params() as usize;
+                        Self::call_host_function(host.as_ref(), callee.ty, stack, params_start);
+                    } else {
+                        return Err(Error::Trap(FUNC_NO_IMPL));
+                    }
+                }
+                // Parametric instructions
+                0x1a => { // drop
+                    if stack.pop().is_none() {
+                        return Err(Error::Trap(STACK_UNDERFLOW));
+                    }
+                }
+                0x1b => { // select
+                    let cond = match stack.pop() {
+                        Some(v) => v.as_u32(),
+                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                    };
+                    let v2 = match stack.pop() {
+                        Some(v) => v,
+                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                    };
+                    let v1 = match stack.pop() {
+                        Some(v) => v,
+                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                    };
+                    stack.push(if cond != 0 { v1 } else { v2 });
+                }
+                // Variable instructions
+                0x20 => { // local.get
+                    let local: u32 = read_leb128(bytes, &mut pc)?;
+                    let base = *fn_bases.last().unwrap();
+                    let i = base + local as usize;
+                    stack.push(stack[i]);
+                }
+                0x21 => { // local.set
+                    let local: u32 = read_leb128(bytes, &mut pc)?;
+                    let val = match stack.pop() {
+                        Some(v) => v,
+                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                    };
+                    let base = *fn_bases.last().unwrap();
+                    let i = base + local as usize;
+                    stack[i] = val;
+                }
+                0x22 => { // local.tee
+                    let local: u32 = read_leb128(bytes, &mut pc)?;
+                    let val = match stack.last() {
+                        Some(v) => *v,
+                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                    };
+                    let base = *fn_bases.last().unwrap();
+                    let i = base + local as usize;
+                    stack[i] = val;
+                }
+                0x23 => { // global.get
+                    let gi: u32 = read_leb128(bytes, &mut pc)?;
+                    if gi as usize >= self.globals.len() {
+                        return Err(Error::Trap(UNKNOWN_GLOBAL));
+                    }
+                    stack.push(self.globals[gi as usize].borrow().value);
+                }
+                0x24 => { // global.set
+                    let gi: u32 = read_leb128(bytes, &mut pc)?;
+                    if gi as usize >= self.globals.len() {
+                        return Err(Error::Trap(UNKNOWN_GLOBAL));
+                    }
+                    let val = match stack.pop() {
+                        Some(v) => v,
+                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                    };
+                    self.globals[gi as usize].borrow_mut().value = val;
+                }
+                // Memory instructions - loads
+                0x28 => { load!(load_u32, |v: u32| WasmValue::from_u32(v)); }
+                0x29 => { load!(load_u64, |v: u64| WasmValue::from_u64(v)); }
+                0x2a => { load!(load_f32, |v: f32| WasmValue::from_f32(v)); }
+                0x2b => { load!(load_f64, |v: f64| WasmValue::from_f64(v)); }
+                0x2c => { load!(load_i8,  |v: i8| WasmValue::from_i32(v as i32)); }
+                0x2d => { load!(load_u8,  |v: u8| WasmValue::from_u32(v as u32)); }
+                0x2e => { load!(load_i16, |v: i16| WasmValue::from_i32(v as i32)); }
+                0x2f => { load!(load_u16, |v: u16| WasmValue::from_u32(v as u32)); }
+                0x30 => { load!(load_i8,  |v: i8| WasmValue::from_i64(v as i64)); }
+                0x31 => { load!(load_u8,  |v: u8| WasmValue::from_u64(v as u64)); }
+                0x32 => { load!(load_i16, |v: i16| WasmValue::from_i64(v as i64)); }
+                0x33 => { load!(load_u16, |v: u16| WasmValue::from_u64(v as u64)); }
+                0x34 => { load!(load_i32, |v: i32| WasmValue::from_i64(v as i64)); }
+                0x35 => { load!(load_u32, |v: u32| WasmValue::from_u64(v as u64)); }
+                // Memory instructions - stores
+                0x36 => { store!(store_u32, |w: WasmValue| w.as_u32()); }
+                0x37 => { store!(store_u64, |w: WasmValue| w.as_u64()); }
+                0x38 => { store!(store_f32, |w: WasmValue| w.as_f32()); }
+                0x39 => { store!(store_f64, |w: WasmValue| w.as_f64()); }
+                0x3a => { store!(store_u8,  |w: WasmValue| (w.as_u32() & 0xFF) as u8); }
+                0x3b => { store!(store_u16, |w: WasmValue| (w.as_u32() & 0xFFFF) as u16); }
+                0x3c => { store!(store_u8,  |w: WasmValue| (w.as_u64() & 0xFF) as u8); }
+                0x3d => { store!(store_u16, |w: WasmValue| (w.as_u64() & 0xFFFF) as u16); }
+                0x3e => { store!(store_u32, |w: WasmValue| (w.as_u64() & 0xFFFF_FFFF) as u32); }
+                // Memory instructions - size/grow
+                0x3f => { // memory.size
+                    pc += 1; // Skip zero flag
+                    let mem = self.memory.as_ref().ok_or(Error::Validation(UNKNOWN_MEMORY))?;
+                    stack.push(WasmValue::from_u32(mem.borrow().size()));
+                }
+                0x40 => { // memory.grow
+                    pc += 1; // Skip zero flag
+                    let delta = match stack.pop() {
+                        Some(v) => v.as_u32(),
+                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                    };
+                    let mem = self.memory.as_ref().ok_or(Error::Validation(UNKNOWN_MEMORY))?;
+                    let old = mem.borrow_mut().grow(delta);
+                    stack.push(WasmValue::from_u32(old));
+                }
+                // Numeric instructions - constants
+                0x41 => { // i32.const
+                    stack.push(WasmValue::from_i32(read_sleb128::<i32>(bytes, &mut pc)?));
+                }
+                0x42 => { // i64.const
+                    stack.push(WasmValue::from_i64(read_sleb128::<i64>(bytes, &mut pc)?));
+                }
+                0x43 => { // f32.const
+                    stack.push(WasmValue::from_f32_bits(u32::from_le_bytes(bytes[pc..pc+4].try_into().unwrap())));
+                    pc += 4;
+                }
+                0x44 => { // f64.const
+                    stack.push(WasmValue::from_f64_bits(u64::from_le_bytes(bytes[pc..pc+8].try_into().unwrap())));
+                    pc += 8;
+                }
+                // Numeric instructions - i32 comparison
+                0x45 => { unary!(u32, |x: u32| (x == 0) as u32); } // i32.eqz
+                0x46 => { compare!(u32, ==); } // i32.eq
+                0x47 => { compare!(u32, !=); } // i32.ne
+                0x48 => { compare!(i32, <); } // i32.lt_s
+                0x49 => { compare!(u32, <); } // i32.lt_u
+                0x4a => { compare!(i32, >); } // i32.gt_s
+                0x4b => { compare!(u32, >); } // i32.gt_u
+                0x4c => { compare!(i32, <=); } // i32.le_s
+                0x4d => { compare!(u32, <=); } // i32.le_u
+                0x4e => { compare!(i32, >=); } // i32.ge_s
+                0x4f => { compare!(u32, >=); } // i32.ge_u
+                // Numeric instructions - i64 comparison
+                0x50 => { // i64.eqz
+                    let v = pop_val!().as_u64();
+                    stack.push(WasmValue::from_u32((v == 0) as u32));
+                }
+                0x51 => { compare!(i64, ==); } // i64.eq
+                0x52 => { compare!(i64, !=); } // i64.ne
+                0x53 => { compare!(i64, <); } // i64.lt_s
+                0x54 => { compare!(u64, <); } // i64.lt_u
+                0x55 => { compare!(i64, >); } // i64.gt_s
+                0x56 => { compare!(u64, >); } // i64.gt_u
+                0x57 => { compare!(i64, <=); } // i64.le_s
+                0x58 => { compare!(u64, <=); } // i64.le_u
+                0x59 => { compare!(i64, >=); } // i64.ge_s
+                0x5a => { compare!(u64, >=); } // i64.ge_u
+                // Numeric instructions - f32 comparison
+                0x5b => { compare!(f32, ==); } // f32.eq
+                0x5c => { compare!(f32, !=); } // f32.ne
+                0x5d => { compare!(f32, <); } // f32.lt
+                0x5e => { compare!(f32, >); } // f32.gt
+                0x5f => { compare!(f32, <=); } // f32.le
+                0x60 => { compare!(f32, >=); } // f32.ge
+                // Numeric instructions - f64 comparison
+                0x61 => { compare!(f64, ==); } // f64.eq
+                0x62 => { compare!(f64, !=); } // f64.ne
+                0x63 => { compare!(f64, <); } // f64.lt
+                0x64 => { compare!(f64, >); } // f64.gt
+                0x65 => { compare!(f64, <=); } // f64.le
+                0x66 => { compare!(f64, >=); } // f64.ge
+                // Numeric instructions - i32 operations
+                0x67 => { unary!(u32, |x: u32| x.leading_zeros()); } // i32.clz
+                0x68 => { unary!(u32, |x: u32| x.trailing_zeros()); } // i32.ctz
+                0x69 => { unary!(u32, |x: u32| x.count_ones()); } // i32.popcnt
+                0x6a => { binary!(u32, .wrapping_add); } // i32.add
+                0x6b => { binary!(u32, .wrapping_sub); } // i32.sub
+                0x6c => { binary!(u32, .wrapping_mul); } // i32.mul
+                0x6d => { div_s!(i32); } // i32.div_s
+                0x6e => { div_u!(u32); } // i32.div_u
+                0x6f => { rem_s!(i32); } // i32.rem_s
+                0x70 => { rem_u!(u32); } // i32.rem_u
+                0x71 => { binary!(u32, &); } // i32.and
+                0x72 => { binary!(u32, |); } // i32.or
+                0x73 => { binary!(u32, ^); } // i32.xor
+                0x74 => { shift!(u32, <<); } // i32.shl
+                0x75 => { shr_s!(i32, u32, 32); } // i32.shr_s
+                0x76 => { shift!(u32, >>); } // i32.shr_u
+                0x77 => { rotate!(u32, left); } // i32.rotl
+                0x78 => { rotate!(u32, right); } // i32.rotr
+                // Numeric instructions - i64 operations
+                0x79 => { unary!(u64, |x: u64| x.leading_zeros() as u64); } // i64.clz
+                0x7a => { unary!(u64, |x: u64| x.trailing_zeros() as u64); } // i64.ctz
+                0x7b => { unary!(u64, |x: u64| x.count_ones() as u64); } // i64.popcnt
+                0x7c => { binary!(u64, .wrapping_add); } // i64.add
+                0x7d => { binary!(u64, .wrapping_sub); } // i64.sub
+                0x7e => { binary!(u64, .wrapping_mul); } // i64.mul
+                0x7f => { div_s!(i64); } // i64.div_s
+                0x80 => { div_u!(u64); } // i64.div_u
+                0x81 => { rem_s!(i64); } // i64.rem_s
+                0x82 => { rem_u!(u64); } // i64.rem_u
+                0x83 => { binary!(u64, &); } // i64.and
+                0x84 => { binary!(u64, |); } // i64.or
+                0x85 => { binary!(u64, ^); } // i64.xor
+                0x86 => { shift!(u64, <<); } // i64.shl
+                0x87 => { shr_s!(i64, u64, 64); } // i64.shr_s
+                0x88 => { shift!(u64, >>); } // i64.shr_u
+                0x89 => { rotate!(u64, left); } // i64.rotl
+                0x8a => { rotate!(u64, right); } // i64.rotr
+                // Numeric instructions - f32 operations
+                0x8b => { unary!(f32, |x: f32| x.abs()); } // f32.abs
+                0x8c => { unary!(f32, |x: f32| -x); } // f32.neg
+                0x8d => { unary!(f32, |x: f32| x.ceil()); } // f32.ceil
+                0x8e => { unary!(f32, |x: f32| x.floor()); } // f32.floor
+                0x8f => { unary!(f32, |x: f32| x.trunc()); } // f32.trunc
+                0x90 => { nearest!(f32); } // f32.nearest
+                0x91 => { unary!(f32, |x: f32| x.sqrt()); } // f32.sqrt
+                0x92 => { binary!(f32, +); } // f32.add
+                0x93 => { binary!(f32, -); } // f32.sub
+                0x94 => { binary!(f32, *); } // f32.mul
+                0x95 => { binary!(f32, /); } // f32.div
+                0x96 => { minmax!(f32, min); } // f32.min
+                0x97 => { minmax!(f32, max); } // f32.max
+                0x98 => { copysign!(f32); } // f32.copysign
+                // Numeric instructions - f64 operations
+                0x99 => { unary!(f64, |x: f64| x.abs()); } // f64.abs
+                0x9a => { unary!(f64, |x: f64| -x); } // f64.neg
+                0x9b => { unary!(f64, |x: f64| x.ceil()); } // f64.ceil
+                0x9c => { unary!(f64, |x: f64| x.floor()); } // f64.floor
+                0x9d => { unary!(f64, |x: f64| x.trunc()); } // f64.trunc
+                0x9e => { nearest!(f64); } // f64.nearest
+                0x9f => { unary!(f64, |x: f64| x.sqrt()); } // f64.sqrt
+                0xa0 => { binary!(f64, +); } // f64.add
+                0xa1 => { binary!(f64, -); } // f64.sub
+                0xa2 => { binary!(f64, *); } // f64.mul
+                0xa3 => { binary!(f64, /); } // f64.div
+                0xa4 => { minmax!(f64, min); } // f64.min
+                0xa5 => { minmax!(f64, max); } // f64.max
+                0xa6 => { copysign!(f64); } // f64.copysign
+                // Conversions and truncations
+                0xa7 => { convert!(u64 -> u32); } // i32.wrap_i64
+                0xa8 => { trunc!(f32 -> i32 : -2147483777.0, 2147483648.0); } // i32.trunc_f32_s
+                0xa9 => { trunc!(f32 -> u32 : -1.0, 4294967296.0); } // i32.trunc_f32_u
+                0xaa => { trunc!(f64 -> i32 : -2147483649.0, 2147483648.0); } // i32.trunc_f64_s
+                0xab => { trunc!(f64 -> u32 : -1.0, 4294967296.0); } // i32.trunc_f64_u
+                0xac => { convert!(i32 -> i64); } // i64.extend_i32_s
+                0xad => { convert!(u32 -> u64); } // i64.extend_i32_u
+                0xae => { trunc!(f32 -> i64 : -9223373136366404000.0, 9223372036854776000.0); } // i64.trunc_f32_s
+                0xaf => { trunc!(f32 -> u64 : -1.0, 18446744073709552000.0); } // i64.trunc_f32_u
+                0xb0 => { trunc!(f64 -> i64 : -9223372036854777856.0, 9223372036854776000.0); } // i64.trunc_f64_s
+                0xb1 => { trunc!(f64 -> u64 : -1.0, 18446744073709552000.0); } // i64.trunc_f64_u
+                // Float conversions from integers
+                0xb2 => { convert!(i32 -> f32); } // f32.convert_i32_s
+                0xb3 => { convert!(u32 -> f32); } // f32.convert_i32_u
+                0xb4 => { convert!(i64 -> f32); } // f32.convert_i64_s
+                0xb5 => { convert!(u64 -> f32); } // f32.convert_i64_u
+                0xb6 => { convert!(f64 -> f32); } // f32.demote_f64
+                0xb7 => { convert!(i32 -> f64); } // f64.convert_i32_s
+                0xb8 => { convert!(u32 -> f64); } // f64.convert_i32_u
+                0xb9 => { convert!(i64 -> f64); } // f64.convert_i64_s
+                0xba => { convert!(u64 -> f64); } // f64.convert_i64_u
+                0xbb => { convert!(f32 -> f64); } // f64.promote_f32
+                _ => {
+                    return Err(Error::Malformed(UNKNOWN_INSTRUCTION));
+                }
             }
         }
-        Ok(())
+    }
+
+    #[inline]
+    fn branch(pc: &mut usize, stack: &mut Vec<WasmValue>, control: &mut Vec<ControlFrame>, depth: u32) -> bool {
+        let len = control.len();
+        if depth as usize >= len { return true; }
+        let keep = len - depth as usize;
+        control.truncate(keep);
+        let Some(target) = control.pop() else { return true; };
+        let result_arity = target.arity as usize;
+
+        if result_arity > 0 {
+            let stack_len = stack.len();
+            let src_start = stack_len.saturating_sub(result_arity);
+
+            if src_start > target.stack_len {
+                stack.copy_within(src_start..stack_len, target.stack_len);
+            }
+            stack.truncate(target.stack_len + result_arity);
+        } else {
+            stack.truncate(target.stack_len);
+        }
+
+        *pc = target.dest_pc;
+        control.is_empty()
     }
 }
