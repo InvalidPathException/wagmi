@@ -668,6 +668,224 @@ impl Instance {
         fn_bases: &mut Vec<usize>,
         ctrl_bases: &mut Vec<usize>
     ) -> Result<(), Error> {
+        let bytes = &self.module.bytes;
+
+        macro_rules! next_op { () => {{ let byte = bytes[pc]; pc += 1; byte }} }
+        macro_rules! pop_val { () => {{
+            match stack.pop() { Some(v) => v, None => return Err(Error::Trap(STACK_UNDERFLOW)) }
+        }} }
+        macro_rules! binary {
+            ($type:ident, $op:tt) => {{
+                paste! {
+                    let b = pop_val!().[<as_ $type>]();
+                    let a = pop_val!().[<as_ $type>]();
+                    stack.push(WasmValue::[<from_ $type>](a $op b));
+                }
+            }};
+            ($type:ident, .$method:ident) => {{
+                paste! {
+                    let b = pop_val!().[<as_ $type>]();
+                    let a = pop_val!().[<as_ $type>]();
+                    stack.push(WasmValue::[<from_ $type>](a.$method(b)));
+                }
+            }};
+        }
+        macro_rules! compare {
+            ($type:ident, $op:tt) => {{
+                paste! {
+                    let b = pop_val!().[<as_ $type>]();
+                    let a = pop_val!().[<as_ $type>]();
+                    stack.push(WasmValue::from_u32((a $op b) as u32));
+                }
+            }};
+        }
+        macro_rules! shift {
+            (u32, $op:tt) => {{
+                let b = pop_val!().as_u32() % 32;
+                let a = pop_val!().as_u32();
+                stack.push(WasmValue::from_u32(a $op b));
+            }};
+            (u64, $op:tt) => {{
+                let b = pop_val!().as_u64() % 64;
+                let a = pop_val!().as_u64();
+                stack.push(WasmValue::from_u64(a $op b));
+            }};
+        }
+        macro_rules! rotate {
+            (u32, $dir:ident) => {{
+                let b = pop_val!().as_u32();
+                let a = pop_val!().as_u32();
+                paste! {
+                    stack.push(WasmValue::from_u32(a.[<rotate_ $dir>](b % 32)));
+                }
+            }};
+            (u64, $dir:ident) => {{
+                let b = pop_val!().as_u64();
+                let a = pop_val!().as_u64();
+                paste! {
+                    stack.push(WasmValue::from_u64(a.[<rotate_ $dir>]((b % 64) as u32)));
+                }
+            }};
+        }
+        macro_rules! unary {
+            ($type:ident, $f:expr) => {{
+                paste! {
+                    let a = pop_val!().[<as_ $type>]();
+                    stack.push(WasmValue::[<from_ $type>]($f(a)));
+                }
+            }};
+        }
+        macro_rules! minmax {
+            ($type:ident, $f:ident) => {{
+                paste! {
+                    let b = pop_val!().[<as_ $type>]();
+                    let a = pop_val!().[<as_ $type>]();
+                    if a.is_nan() || b.is_nan() {
+                        stack.push(WasmValue::[<from_ $type>]($type::NAN));
+                    } else {
+                        stack.push(WasmValue::[<from_ $type>]($type::$f(a, b)));
+                    }
+                }
+            }};
+        }
+        macro_rules! shr_s {
+            ($int_type:ident, $uint_type:ident, $bits:literal) => {{
+                paste! {
+                    let b = pop_val!().[<as_ $uint_type>]() % $bits;
+                    let a = pop_val!().[<as_ $int_type>]();
+                    stack.push(WasmValue::[<from_ $int_type>](a >> b));
+                }
+            }};
+        }
+        macro_rules! copysign {
+            ($type:ident) => {{
+                paste! {
+                    let b = pop_val!().[<as_ $type>]();
+                    let a = pop_val!().[<as_ $type>]();
+                    stack.push(WasmValue::[<from_ $type>](a.copysign(b)));
+                }
+            }};
+        }
+        macro_rules! nearest {
+            ($type:ident) => {{
+                paste! {
+                    let x = stack.pop().unwrap().[<as_ $type>]();
+                    let y = if x.is_nan() || x.is_infinite() {
+                        x
+                    } else {
+                        let lower = x.floor();
+                        let upper = x.ceil();
+                        let dl = x - lower;
+                        let du = upper - x;
+                        if dl < du {
+                            lower
+                        } else if dl > du {
+                            upper
+                        } else {
+                            if (lower % 2.0) == 0.0 { lower } else { upper }
+                        }
+                    };
+                    stack.push(WasmValue::[<from_ $type>](y));
+                }
+            }};
+        }
+        macro_rules! convert {
+            ($src_type:ident -> $dst_type:ident) => {{
+                paste! {
+                    let v = stack.pop().unwrap().[<as_ $src_type>]();
+                    stack.push(WasmValue::[<from_ $dst_type>](v as $dst_type));
+                }
+            }};
+        }
+        macro_rules! trunc {
+            ($src_type:ident -> $dst_type:ident : $min:expr, $max:expr) => {{
+                paste! {
+                    let x = stack.pop().unwrap().[<as_ $src_type>]();
+                    if !x.is_finite() {
+                        if x.is_nan() {
+                            return Err(Error::Trap(INVALID_CONV_TO_INT));
+                        } else {
+                            return Err(Error::Trap(INTEGER_OVERFLOW));
+                        }
+                    }
+                    if x <= $min || x >= $max {
+                        return Err(Error::Trap(INTEGER_OVERFLOW));
+                    }
+                    stack.push(WasmValue::[<from_ $dst_type>](x as $dst_type));
+                }
+            }};
+        }
+        macro_rules! div_s {
+            ($int_type:ident) => {{
+                paste! {
+                    let b = pop_val!().[<as_ $int_type>]();
+                    let a = pop_val!().[<as_ $int_type>]();
+                    if b == 0 { return Err(Error::Trap(DIVIDE_BY_ZERO)); }
+                    if a == $int_type::MIN && b == -1 { return Err(Error::Trap(INTEGER_OVERFLOW)); }
+                    stack.push(WasmValue::[<from_ $int_type>](a / b));
+                }
+            }};
+        }
+        macro_rules! div_u {
+            ($uint_type:ident) => {{
+                paste! {
+                    let b = pop_val!().[<as_ $uint_type>]();
+                    let a = pop_val!().[<as_ $uint_type>]();
+                    if b == 0 { return Err(Error::Trap(DIVIDE_BY_ZERO)); }
+                    stack.push(WasmValue::[<from_ $uint_type>](a / b));
+                }
+            }};
+        }
+        macro_rules! rem_s {
+            ($int_type:ident) => {{
+                paste! {
+                    let b = pop_val!().[<as_ $int_type>]();
+                    let a = pop_val!().[<as_ $int_type>]();
+                    if b == 0 { return Err(Error::Trap(DIVIDE_BY_ZERO)); }
+                    if a == $int_type::MIN && b == -1 {
+                        stack.push(WasmValue::[<from_ $int_type>](0));
+                    } else {
+                        stack.push(WasmValue::[<from_ $int_type>](a % b));
+                    }
+                }
+            }};
+        }
+        macro_rules! rem_u {
+            ($uint_type:ident) => {{
+                paste! {
+                    let b = pop_val!().[<as_ $uint_type>]();
+                    let a = pop_val!().[<as_ $uint_type>]();
+                    if b == 0 { return Err(Error::Trap(DIVIDE_BY_ZERO)); }
+                    stack.push(WasmValue::[<from_ $uint_type>](a % b));
+                }
+            }};
+        }
+        macro_rules! load { ($method:ident, $push:expr) => {{
+            let _align: u32 = read_leb128(bytes, &mut pc)?;
+            let offset: u32 = read_leb128(bytes, &mut pc)?;
+            let addr = pop_val!().as_u32();
+            let mem = self.memory.as_ref().ok_or_else(|| Error::Validation(UNKNOWN_MEMORY))?;
+            let v = mem.borrow().$method(addr, offset).map_err(|e| Error::Trap(e))?;
+            let val = ($push)(v);
+            stack.push(val);
+        }}}
+        macro_rules! store { ($method:ident, $from:expr) => {{
+            let _align: u32 = read_leb128(bytes, &mut pc)?;
+            let offset: u32 = read_leb128(bytes, &mut pc)?;
+            let raw = pop_val!();
+            let addr = pop_val!().as_u32();
+            let val = ($from)(raw);
+            let mem = self.memory.as_ref().ok_or_else(|| Error::Validation(UNKNOWN_MEMORY))?;
+            mem.borrow_mut().$method(addr, offset, val).map_err(|e| Error::Trap(e))?;
+        }}}
+
+        loop {
+            if pc >= bytes.len() { return Err(Error::Malformed(UNEXPECTED_END)); }
+            let byte = next_op!();
+            match byte {
+                _ => { break; },
+            }
+        }
         Ok(())
     }
 }
