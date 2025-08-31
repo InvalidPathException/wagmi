@@ -317,9 +317,7 @@ impl Instance {
             // Memory
             if let Some(memory) = &module.memory {
                 if let Some(import_ref) = memory.import.clone() {
-                    let module = import_ref.module;
-                    let field = import_ref.field;
-                    let imported = imports.get(&module).and_then(|m| m.get(&field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
+                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
                     match imported {
                         ExportValue::Memory(mem) => {
                             let m = mem.borrow();
@@ -337,9 +335,7 @@ impl Instance {
             // Tables
             if let Some(table) = &module.table {
                 if let Some(import_ref) = table.import.clone() {
-                    let module = import_ref.module;
-                    let field = import_ref.field;
-                    let imported = imports.get(&module).and_then(|m| m.get(&field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
+                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
                     match imported {
                         ExportValue::Table(tab) => {
                             let tb = tab.borrow();
@@ -358,9 +354,7 @@ impl Instance {
             inst.functions.reserve(module.functions.len());
             for function in &module.functions {
                 if let Some(import_ref) = function.import.clone() {
-                    let module = import_ref.module;
-                    let field = import_ref.field;
-                    let imported = imports.get(&module).and_then(|m| m.get(&field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
+                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
                     let ty = RuntimeType::from_signature(&function.ty);
                     match imported {
                         ExportValue::Function(f) => {
@@ -379,9 +373,7 @@ impl Instance {
             inst.globals.reserve(module.globals.len());
             for g in &module.globals {
                 if let Some(import_ref) = g.import.clone() {
-                    let module = import_ref.module;
-                    let field = import_ref.field;
-                    let imported = imports.get(&module).and_then(|m| m.get(&field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
+                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
                     match imported {
                         ExportValue::Global(gl) => {
                             let gb = gl.borrow();
@@ -431,8 +423,7 @@ impl Instance {
             // Validate and collect data segments (no writes yet)
             let mut pending_data: Option<Vec<(u32, Vec<u8>)>> = None;
             if let Some(mem) = &inst.memory {
-                struct PendingData { offset: u32, bytes: Vec<u8> }
-                let mut pending: Vec<PendingData> = Vec::new();
+                let mut pending: Vec<(u32, Vec<u8>)> = Vec::new();
                 for seg in &module.data_segments {
                     let mut ip = seg.initializer_offset;
                     let offset = Instance::eval_const(&module, &mut ip, &inst.globals)?.as_u32();
@@ -443,10 +434,10 @@ impl Instance {
                         return Err(Error::Link(DATA_SEG_DNF));
                     }
                     drop(m);
-                    pending.push(PendingData { offset, bytes: bytes_vec });
+                    pending.push((offset, bytes_vec));
                 }
                 if !pending.is_empty() {
-                    pending_data = Some(pending.into_iter().map(|p| (p.offset, p.bytes)).collect());
+                    pending_data = Some(pending);
                 }
             }
 
@@ -888,8 +879,7 @@ impl Instance {
 
         loop {
             if pc >= bytes.len() { return Err(Error::Malformed(UNEXPECTED_END)); }
-            let byte = next_op!();
-            match byte {
+            match next_op!() {
                 0x00 => return Err(Error::Trap(UNREACHABLE)),
                 0x01 | 0xbc | 0xbd | 0xbe | 0xbf => {} // nop and reinterprets (no-op on raw bits)
                 0x02 => { // block

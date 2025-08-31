@@ -193,13 +193,11 @@ impl<'a> Validator<'a> {
 
         // Validation loop
         loop {
-            let opcode = it.read_u8()?;let validator = get_validators()[opcode as usize];
-            match validator(self.module, &mut it, &func, &mut vs) {
+            let opcode = it.read_u8()?;
+            match get_validators()[opcode as usize](self.module, &mut it, &func, &mut vs) {
                 Ok(Action::Continue) => continue,
                 Ok(Action::End) => break,
-                Err(e) => {
-                    return Err(e);
-                }
+                Err(e) => return Err(e),
             }
         }
 

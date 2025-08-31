@@ -212,14 +212,13 @@ impl Module {
                 .map_err(|_| Malformed(INVALID_UTF8))?;
             it.idx = field_start + field_len as usize;
 
-            let byte = it.read_u8()?;
-            let extern_type = ExternType::from_byte(byte)
+            let extern_type = ExternType::from_byte(it.read_u8()?)
                 .ok_or(Malformed(MALFORMED_IMPORT_KIND))?;
 
             self.imports.entry(module_name.clone()).or_default().insert(field_name.clone(), extern_type);
             let import = Some(ImportRef {
-                module: module_name.clone(),
-                field: field_name.clone()
+                module: module_name,
+                field: field_name
             });
 
             match extern_type {
@@ -456,10 +455,7 @@ impl Module {
             }
 
             // Initialize locals with params
-            {
-                let function = &mut self.functions[i];
-                self.functions[i].locals = function.ty.params.clone();
-            }
+            self.functions[i].locals = self.functions[i].ty.params.clone();
 
             let function_length: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             let func_start = it.cur();
@@ -487,13 +483,9 @@ impl Module {
             let body_length = function_length as usize - (body_start - func_start);
             let body_end_expected = body_start + body_length;
 
-            {
-                let function = &mut self.functions[i];
-                function.body = body_start..body_end_expected;
-            }
+            self.functions[i].body = body_start..body_end_expected;
 
             // Validate function body immediately
-            // TODO: check if this can be a member
             Validator::new(self).validate_function(i)?;
             // Advance outer iterator to end of validated body
             it.advance(body_length);
