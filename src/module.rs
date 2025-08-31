@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::byte_iter::*;
-use crate::error::*;
 use crate::error::Error::*;
+use crate::error::*;
 use crate::leb128::*;
 use crate::signature::*;
-use crate::validator::{Validator, validate_const};
+use crate::validator::{validate_const, Validator};
 
 const MAGIC_HEADER: &[u8; 4] = b"\0asm";
 

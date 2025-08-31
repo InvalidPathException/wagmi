@@ -1,5 +1,5 @@
-use crate::error::*;
 use crate::error::Error::*;
+use crate::error::*;
 
 #[derive(Clone, Copy)]
 pub struct ByteIter<'a> {

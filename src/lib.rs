@@ -13,10 +13,10 @@ mod byte_iter;
 mod error;
 
 // Core types
-pub use signature::{ValType, Signature};
+pub use signature::{Signature, ValType};
 
 // Runtime types
-pub use instance::{Instance, WasmValue, WasmGlobal, WasmTable, RuntimeFunction, RuntimeType, ExportValue, Imports};
+pub use instance::{ExportValue, Imports, Instance, RuntimeFunction, RuntimeType, WasmGlobal, WasmTable, WasmValue};
 
 // Main API types
 pub use module::Module;

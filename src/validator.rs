@@ -1,9 +1,9 @@
 use crate::byte_iter::ByteIter;
+use crate::error::Error::*;
 use crate::error::*;
 use crate::leb128::*;
 use crate::module::*;
 use crate::signature::*;
-use crate::error::Error::*;
 
 // ---------------- Control Flow Structures ----------------
 #[derive(Clone)]

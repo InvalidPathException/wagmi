@@ -1,5 +1,5 @@
-use crate::error::*;
 use crate::error::Error::*;
+use crate::error::*;
 
 #[inline]
 fn read_leb128_u64(bytes: &[u8], mut pos: usize) -> Result<(u64, usize), Error> {

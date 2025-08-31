@@ -1,13 +1,13 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::{Rc, Weak};
-use paste::paste;
 use crate::error::*;
 use crate::leb128::{read_leb128, read_sleb128};
-use crate::Module;
 use crate::module::ExternType;
 use crate::signature::*;
 use crate::wasm_memory::WasmMemory;
+use crate::Module;
+use paste::paste;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 
 #[derive(Copy, Clone, Default)]
 pub struct WasmValue(pub u64);
