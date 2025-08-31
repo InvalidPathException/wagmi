@@ -431,7 +431,13 @@ fn run_test_file(json_path: &Path, wast_name: &str) -> Result<(u32, u32, u32), S
 fn run_spec_tests() {
     let filter = env::var("SPEC_FILTER").ok();
     let test_dir = Path::new("tests/core");
-    let wast2json = Path::new("tools/wast2json");
+    let wast2json = if cfg!(target_os = "macos") {
+        Path::new("tools/osx/wast2json")
+    } else if cfg!(target_os = "linux") {
+        Path::new("tools/linux/wast2json")
+    } else {
+        panic!("Unsupported OS for wast2json")
+    };
     let tmp_dir = Path::new("tmp/spec-json");
     
     // Create tmp directory if it doesn't exist
