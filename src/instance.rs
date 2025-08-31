@@ -260,7 +260,7 @@ pub struct RuntimeFunction {
     // to avoid cycles. When invoked, execution should occur in the owning
     // instance context using the stored index.
     pub owner: Option<Weak<Instance>>,
-    pub owner_index: Option<usize>,
+    pub owner_idx: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -371,7 +371,7 @@ impl Instance {
                     }
                 } else {
                     let locals_count = function.locals.len().saturating_sub(function.ty.params.len());
-                    inst.functions.push(RuntimeFunction { ty: RuntimeType::from_signature(&function.ty), pc_start: Some(function.body.start), locals_count, host: None, owner: None, owner_index: None });
+                    inst.functions.push(RuntimeFunction { ty: RuntimeType::from_signature(&function.ty), pc_start: Some(function.body.start), locals_count, host: None, owner: None, owner_idx: None });
                 }
             }
 
@@ -420,8 +420,8 @@ impl Instance {
                     }
                     let mut indices: Vec<u32> = Vec::with_capacity(n as usize);
                     for _ in 0..n {
-                        let fn_index: u32 = read_leb128(bytes, &mut it)?;
-                        indices.push(fn_index);
+                        let func_idx: u32 = read_leb128(bytes, &mut it)?;
+                        indices.push(func_idx);
                     }
                     collected.push((offset, indices));
                 }
@@ -460,14 +460,14 @@ impl Instance {
                 }
                 for (offset, indices) in collected.iter() {
                     for (j, idx_fn) in indices.iter().enumerate() {
-                        let fn_index = *idx_fn as usize;
-                        let f = inst.functions[fn_index].clone();
-                        let (owner_id, owner_fn_index) = if let (Some(weak_owner), Some(owner_idx)) = (f.owner.clone(), f.owner_index) {
-                            if let Some(owner_rc) = weak_owner.upgrade() { (owner_rc.id, owner_idx as u32) } else { (inst.id, fn_index as u32) }
+                        let func_idx = *idx_fn as usize;
+                        let f = inst.functions[func_idx].clone();
+                        let (owner_id, owner_func_idx) = if let (Some(weak_owner), Some(owner_idx)) = (f.owner.clone(), f.owner_idx) {
+                            if let Some(owner_rc) = weak_owner.upgrade() { (owner_rc.id, owner_idx as u32) } else { (inst.id, func_idx as u32) }
                         } else {
-                            (inst.id, fn_index as u32)
+                            (inst.id, func_idx as u32)
                         };
-                        let func_ref = FuncRef::new(owner_id, owner_fn_index);
+                        let func_ref = FuncRef::new(owner_id, owner_func_idx);
                         let func_ref_value = WasmValue::from_u64(func_ref.as_raw());
                         if table_rc.borrow_mut().set(*offset + (j as u32), func_ref_value).is_err() {
                             return Err(Error::Link(ELEM_SEG_DNF));
@@ -518,7 +518,7 @@ impl Instance {
             let mut control: Vec<ControlFrame> = Vec::new();
             let mut bases: Vec<usize> = Vec::new();
             let mut ctrl_bases = vec![];
-            match inst_rc.call_function_index(fi, &mut return_pc, &mut stack, &mut control, &mut bases, &mut ctrl_bases) {
+            match inst_rc.call_function_idx(fi, &mut return_pc, &mut stack, &mut control, &mut bases, &mut ctrl_bases) {
                 Ok(()) => {}
                 Err(Error::Trap(msg)) => {
                     // If there are live func_ref references to this instance,
@@ -570,7 +570,7 @@ impl Instance {
         function: &RuntimeFunction,
         stack: &mut Vec<WasmValue>,
         control: &mut Vec<ControlFrame>,
-        fn_bases: &mut Vec<usize>,
+        func_bases: &mut Vec<usize>,
         ctrl_bases: &mut Vec<usize>,
         return_dest: usize
     ) -> Result<usize, Error> {
@@ -597,7 +597,7 @@ impl Instance {
         }
 
         // Track function frame bases
-        fn_bases.push(locals_start);
+        func_bases.push(locals_start);
         ctrl_bases.push(control.len() - 1);
 
         // Return the function's start PC
@@ -641,23 +641,23 @@ impl Instance {
         }
     }
 
-    fn call_function_index(
+    fn call_function_idx(
         &self,
         idx: usize,
         return_pc: &mut usize,
         stack: &mut Vec<WasmValue>,
         control: &mut Vec<ControlFrame>,
-        fn_bases: &mut Vec<usize>,
+        func_bases: &mut Vec<usize>,
         ctrl_bases: &mut Vec<usize>
     ) -> Result<(), Error> {
         const MAX_CALL_DEPTH: usize = 1000;
-        if fn_bases.len() >= MAX_CALL_DEPTH {
+        if func_bases.len() >= MAX_CALL_DEPTH {
             return Err(Error::Trap(STACK_EXHAUSTED));
         }
         let fi = &self.functions[idx];
         if fi.pc_start.is_some() {
-            let pc_start = Self::setup_wasm_function_call(fi, stack, control, fn_bases, ctrl_bases, *return_pc)?;
-            self.interpret(pc_start, stack, control, fn_bases, ctrl_bases)?;
+            let pc_start = Self::setup_wasm_function_call(fi, stack, control, func_bases, ctrl_bases, *return_pc)?;
+            self.interpret(pc_start, stack, control, func_bases, ctrl_bases)?;
         } else if let Some(host) = &fi.host {
             let params_start = stack.len() - fi.ty.n_params() as usize;
             Self::call_host_function(host.as_ref(), fi.ty, stack, params_start);
@@ -672,7 +672,7 @@ impl Instance {
         mut pc: usize,
         stack: &mut Vec<WasmValue>,
         control: &mut Vec<ControlFrame>,
-        fn_bases: &mut Vec<usize>,
+        func_bases: &mut Vec<usize>,
         ctrl_bases: &mut Vec<usize>
     ) -> Result<(), Error> {
         let bytes = &self.module.bytes;
@@ -921,15 +921,15 @@ impl Instance {
                     let cond = pop_val!().as_u32();
                     crate::debug_println!("[ctrl] enter if: pc_after_bt={} (0x{:x}) cond={}", pc, pc, cond);
                     debug_assert!(self.module.if_jumps.contains_key(&pc), "missing if jump mapping for key {}", pc);
-                    let ifjump = self.module.if_jumps.get(&pc).unwrap();
-                    crate::debug_println!("[ctrl]   else_offset={} (0x{:x}) end_offset={} (0x{:x})", ifjump.else_offset, ifjump.else_offset, ifjump.end_offset, ifjump.end_offset);
+                    let if_jump = self.module.if_jumps.get(&pc).unwrap();
+                    crate::debug_println!("[ctrl]   else_offset={} (0x{:x}) end_offset={} (0x{:x})", if_jump.else_offset, if_jump.else_offset, if_jump.end_offset, if_jump.end_offset);
                     control.push(ControlFrame {
                         stack_len: stack.len() - sig.params.len(),
-                        dest_pc: ifjump.end_offset,
+                        dest_pc: if_jump.end_offset,
                         arity: sig.result.is_some() as u32,
                         has_result: sig.result.is_some()
                     });
-                    if cond == 0 { pc = ifjump.else_offset; }
+                    if cond == 0 { pc = if_jump.else_offset; }
                 }
                 0x05 => { // else
                     crate::debug_println!("[ctrl] else: simulating br depth 0");
@@ -943,11 +943,11 @@ impl Instance {
                         if frame_idx == control.len().saturating_sub(1) {
                             if Instance::branch(&mut pc, stack, control, 0) {
                                 ctrl_bases.pop();
-                                let _ = fn_bases.pop();
+                                let _ = func_bases.pop();
                                 return Ok(());
                             }
                             ctrl_bases.pop();
-                            let _ = fn_bases.pop();
+                            let _ = func_bases.pop();
                             continue; // Skip the regular block logic
                         }
                     }
@@ -992,18 +992,18 @@ impl Instance {
                     let depth = (control.len() - 1).saturating_sub(base_idx) as u32;
                     if Instance::branch(&mut pc, stack, control, depth) {
                         ctrl_bases.pop();
-                        let _ = fn_bases.pop();
+                        let _ = func_bases.pop();
                         return Ok(());
                     }
                     ctrl_bases.pop();
-                    let _ = fn_bases.pop();
+                    let _ = func_bases.pop();
                 }
                 // Call instructions
                 0x10 => { // call
                     let fi: u32 = read_leb128(bytes, &mut pc)?;
                     let f = &self.functions[fi as usize];
 
-                    if let (Some(owner_weak), Some(owner_idx)) = (&f.owner, f.owner_index) {
+                    if let (Some(owner_weak), Some(owner_idx)) = (&f.owner, f.owner_idx) {
                         if let Some(owner_rc) = owner_weak.upgrade() {
                             let n_params = f.ty.n_params() as usize;
                             let params_start = stack.len() - n_params;
@@ -1012,15 +1012,15 @@ impl Instance {
                             stack.truncate(params_start);
                             let mut control_nested: Vec<ControlFrame> = Vec::new();
                             let mut ret_pc_nested = 0usize;
-                            let mut fn_bases_nested: Vec<usize> = Vec::new();
+                            let mut func_bases_nested: Vec<usize> = Vec::new();
                             let mut ctrl_bases_nested = vec![];
-                            owner_rc.call_function_index(owner_idx, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut fn_bases_nested, &mut ctrl_bases_nested)?;
+                            owner_rc.call_function_idx(owner_idx, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut func_bases_nested, &mut ctrl_bases_nested)?;
                             for v in tmp_stack { stack.push(v); }
                         } else {
                             return Err(Error::Trap(FUNC_NO_IMPL));
                         }
                     } else if f.pc_start.is_some() {
-                        pc = Self::setup_wasm_function_call(f, stack, control, fn_bases, ctrl_bases, pc)?;
+                        pc = Self::setup_wasm_function_call(f, stack, control, func_bases, ctrl_bases, pc)?;
                     } else if let Some(host) = &f.host {
                         let params_start = stack.len() - f.ty.n_params() as usize;
                         Self::call_host_function(host.as_ref(), f.ty, stack, params_start);
@@ -1056,7 +1056,7 @@ impl Instance {
                     if low == 0 {
                         return Err(Error::Trap(FUNC_NO_IMPL));
                     }
-                    let fn_index = (low - 1) as usize;
+                    let func_idx = (low - 1) as usize;
                     let expected = RuntimeType::from_signature(&self.module.types[type_idx as usize]);
 
                     if owner_id != self.id {
@@ -1064,7 +1064,7 @@ impl Instance {
                         let mut sig_ok = false;
                         InstanceManager::with(|mgr| {
                             if let Some(owner) = mgr.get_instance(owner_id) {
-                                let callee = &owner.functions[fn_index];
+                                let callee = &owner.functions[func_idx];
                                 sig_ok = callee.ty == expected;
                                 if sig_ok {
                                     let n_params = callee.ty.n_params() as usize;
@@ -1074,9 +1074,9 @@ impl Instance {
                                     stack.truncate(params_start);
                                     let mut control_nested: Vec<ControlFrame> = Vec::new();
                                     let mut ret_pc_nested = 0usize;
-                                    let mut fn_bases_nested: Vec<usize> = Vec::new();
+                                    let mut func_bases_nested: Vec<usize> = Vec::new();
                                     let mut ctrl_bases_nested = vec![];
-                                    match owner.call_function_index(fn_index, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut fn_bases_nested, &mut ctrl_bases_nested) {
+                                    match owner.call_function_idx(func_idx, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut func_bases_nested, &mut ctrl_bases_nested) {
                                         Ok(()) => {
                                             for v in tmp_stack { stack.push(v); }
                                             dispatched = true;
@@ -1096,12 +1096,12 @@ impl Instance {
                         }
                     }
 
-                    let callee = self.functions[fn_index].clone();
+                    let callee = self.functions[func_idx].clone();
                     if callee.ty != expected {
                         return Err(Error::Trap(INDIRECT_CALL_MISMATCH));
                     }
 
-                    if let (Some(owner_weak), Some(owner_idx)) = (&callee.owner, callee.owner_index) {
+                    if let (Some(owner_weak), Some(owner_idx)) = (&callee.owner, callee.owner_idx) {
                         if let Some(owner_rc) = owner_weak.upgrade() {
                             let n_params = callee.ty.n_params() as usize;
                             let params_start = stack.len() - n_params;
@@ -1110,15 +1110,15 @@ impl Instance {
                             stack.truncate(params_start);
                             let mut control_nested: Vec<ControlFrame> = Vec::new();
                             let mut ret_pc_nested = 0usize;
-                            let mut fn_bases_nested: Vec<usize> = Vec::new();
+                            let mut func_bases_nested: Vec<usize> = Vec::new();
                             let mut ctrl_bases_nested = vec![];
-                            owner_rc.call_function_index(owner_idx, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut fn_bases_nested, &mut ctrl_bases_nested)?;
+                            owner_rc.call_function_idx(owner_idx, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut func_bases_nested, &mut ctrl_bases_nested)?;
                             for v in tmp_stack { stack.push(v); }
                         } else {
                             return Err(Error::Trap(FUNC_NO_IMPL));
                         }
                     } else if callee.pc_start.is_some() {
-                        pc = Self::setup_wasm_function_call(&callee, stack, control, fn_bases, ctrl_bases, pc)?;
+                        pc = Self::setup_wasm_function_call(&callee, stack, control, func_bases, ctrl_bases, pc)?;
                     } else if let Some(host) = &callee.host {
                         let params_start = stack.len() - callee.ty.n_params() as usize;
                         Self::call_host_function(host.as_ref(), callee.ty, stack, params_start);
@@ -1150,7 +1150,7 @@ impl Instance {
                 // Variable instructions
                 0x20 => { // local.get
                     let local: u32 = read_leb128(bytes, &mut pc)?;
-                    let base = *fn_bases.last().unwrap();
+                    let base = *func_bases.last().unwrap();
                     let i = base + local as usize;
                     stack.push(stack[i]);
                 }
@@ -1160,7 +1160,7 @@ impl Instance {
                         Some(v) => v,
                         None => return Err(Error::Trap(STACK_UNDERFLOW))
                     };
-                    let base = *fn_bases.last().unwrap();
+                    let base = *func_bases.last().unwrap();
                     let i = base + local as usize;
                     stack[i] = val;
                 }
@@ -1170,7 +1170,7 @@ impl Instance {
                         Some(v) => *v,
                         None => return Err(Error::Trap(STACK_UNDERFLOW))
                     };
-                    let base = *fn_bases.last().unwrap();
+                    let base = *func_bases.last().unwrap();
                     let i = base + local as usize;
                     stack[i] = val;
                 }
@@ -1419,28 +1419,28 @@ impl Instance {
         let mut stack: Vec<WasmValue> = Vec::with_capacity(1024);
         for v in args { stack.push(*v); }
         let mut control: Vec<ControlFrame> = Vec::new();
-        let mut fn_bases: Vec<usize> = Vec::new();
+        let mut func_bases: Vec<usize> = Vec::new();
         let return_pc: usize = 0;
 
         // Execute in the correct instance: if this RuntimeFunction has an owner,
         // delegate invocation to that instance.
-        if let (Some(owner_weak), Some(owner_idx)) = (&func.owner, func.owner_index) {
+        if let (Some(owner_weak), Some(owner_idx)) = (&func.owner, func.owner_idx) {
             if let Some(owner_rc) = owner_weak.upgrade() {
                 let mut owned_stack = Vec::with_capacity(64);
                 owned_stack.extend_from_slice(args);
                 let mut control: Vec<ControlFrame> = Vec::new();
                 let mut return_pc: usize = 0;
-                let mut fn_bases: Vec<usize> = Vec::new();
+                let mut func_bases: Vec<usize> = Vec::new();
                 let mut ctrl_bases = vec![];
-                owner_rc.call_function_index(owner_idx, &mut return_pc, &mut owned_stack, &mut control, &mut fn_bases, &mut ctrl_bases)?;
+                owner_rc.call_function_idx(owner_idx, &mut return_pc, &mut owned_stack, &mut control, &mut func_bases, &mut ctrl_bases)?;
                 return Ok(owned_stack);
             }
         }
 
         if func.pc_start.is_some() {
             let mut ctrl_bases = Vec::new();
-            let pc_start = Self::setup_wasm_function_call(func, &mut stack, &mut control, &mut fn_bases, &mut ctrl_bases, return_pc)?;
-            self.interpret(pc_start, &mut stack, &mut control, &mut fn_bases, &mut ctrl_bases)?;
+            let pc_start = Self::setup_wasm_function_call(func, &mut stack, &mut control, &mut func_bases, &mut ctrl_bases, return_pc)?;
+            self.interpret(pc_start, &mut stack, &mut control, &mut func_bases, &mut ctrl_bases)?;
         } else if let Some(host) = &func.host {
             Self::call_host_function(host.as_ref(), func.ty, &mut stack, 0);
         } else {

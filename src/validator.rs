@@ -173,8 +173,8 @@ impl<'a> Validator<'a> {
         Self { module }
     }
     
-    pub fn validate_function(&mut self, fn_index: usize) -> Result<(), Error> {
-        let func = self.module.functions[fn_index].clone();
+    pub fn validate_function(&mut self, func_idx: usize) -> Result<(), Error> {
+        let func = self.module.functions[func_idx].clone();
         let bytes = self.module.bytes.clone();
         let mut it = ByteIter::new(&bytes, func.body.start);
         let mut vs = ValidatorStack::new();

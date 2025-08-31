@@ -93,7 +93,7 @@ fn externalized_exports_for(inst: &Rc<Instance>) -> HashMap<String, ExportValue>
                     locals_count: 0,
                     host: None,
                     owner: Some(weak.clone()),
-                    owner_index: Some(fi),
+                    owner_idx: Some(fi),
                 }));
             }
         }
@@ -134,7 +134,7 @@ fn spectest_exports() -> HashMap<String, ExportValue> {
             locals_count: 0, 
             host: Some(Rc::new(|_| {})), 
             owner: None, 
-            owner_index: None 
+            owner_idx: None
         })
     };
     
