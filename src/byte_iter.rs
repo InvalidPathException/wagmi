@@ -15,11 +15,6 @@ impl<'a> ByteIter<'a> {
     #[inline]
     pub fn has_n_left(&self, n: usize) -> bool { self.idx + n <= self.bytes.len() }
     #[inline]
-    pub fn get_with_at_least(&self, n: usize) -> Result<usize, Error> {
-        if !self.has_n_left(n) { return Err(Malformed(UNEXPECTED_END)); }
-        Ok(self.idx)
-    }
-    #[inline]
     pub fn cur(&self) -> usize { self.idx }
     #[inline]
     pub fn advance(&mut self, n: usize) { self.idx += n; }
@@ -34,11 +29,5 @@ impl<'a> ByteIter<'a> {
     pub fn peek_u8(&self) -> Result<u8, Error> {
         if self.idx >= self.bytes.len() { return Err(Malformed(UNEXPECTED_END)); }
         Ok(self.bytes[self.idx])
-    }
-    #[inline]
-    pub fn slice_from(&self, start: usize, len: usize) -> Result<&'a [u8], Error> {
-        let end = start.checked_add(len).ok_or(Malformed(UNEXPECTED_END_SHORT))?;
-        if end > self.bytes.len() { return Err(Malformed(UNEXPECTED_END_SHORT)); }
-        Ok(&self.bytes[start..end])
     }
 }

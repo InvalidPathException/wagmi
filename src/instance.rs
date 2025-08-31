@@ -250,9 +250,9 @@ pub struct WasmGlobal {
 // --------------- Imports/Exports and Functions ---------------
 
 #[derive(Clone)]
-pub struct FunctionInfo {
+pub struct RuntimeFunction {
     pub ty: RuntimeType,
-    pub wasm_fn: Option<usize>,
+    pub pc_start: Option<usize>,
     pub locals_count: usize,
     pub host: Option<Rc<dyn Fn(&mut [WasmValue])>>,
     // If present, this function represents an external/cross-instance
@@ -265,7 +265,7 @@ pub struct FunctionInfo {
 
 #[derive(Clone)]
 pub enum ExportValue {
-    Function(FunctionInfo),
+    Function(RuntimeFunction),
     Table(Rc<RefCell<WasmTable>>),
     Memory(Rc<RefCell<WasmMemory>>),
     Global(Rc<RefCell<WasmGlobal>>),
@@ -289,7 +289,7 @@ pub struct Instance {
     pub memory: Option<Rc<RefCell<WasmMemory>>>,
     pub table: Option<Rc<RefCell<WasmTable>>>,
     pub globals: Vec<Rc<RefCell<WasmGlobal>>>,
-    pub functions: Vec<FunctionInfo>,
+    pub functions: Vec<RuntimeFunction>,
     pub exports: Exports,
 }
 
@@ -297,6 +297,12 @@ impl Instance {
     pub fn new(module: Rc<Module>) -> Self {
         // Other than the validated module, everything starts empty
         Self { module, ..Default::default() }
+    }
+
+    /// Register or re-register an instance, used for testing when wrapping in a new Rc
+    pub fn register_external_instance(inst: &Rc<Instance>) {
+        // This updates the registry entry even if the instance was already registered
+        InstanceManager::with(|mgr| mgr.register_instance(inst));
     }
 
     pub fn instantiate(module: Rc<Module>, imports: &Imports) -> Result<Self, Error> {
@@ -365,7 +371,7 @@ impl Instance {
                     }
                 } else {
                     let locals_count = function.locals.len().saturating_sub(function.ty.params.len());
-                    inst.functions.push(FunctionInfo { ty: RuntimeType::from_signature(&function.ty), wasm_fn: Some(function.body.start), locals_count, host: None, owner: None, owner_index: None });
+                    inst.functions.push(RuntimeFunction { ty: RuntimeType::from_signature(&function.ty), pc_start: Some(function.body.start), locals_count, host: None, owner: None, owner_index: None });
                 }
             }
 
@@ -505,8 +511,8 @@ impl Instance {
         // Start
         if module.start != u32::MAX {
             let fi = module.start as usize;
-            let func_info = &inst_rc.functions[fi];
-            if func_info.ty.n_params() != 0 || func_info.ty.has_result() { return Err(Error::Validation(START_FUNC)); }
+            let function = &inst_rc.functions[fi];
+            if function.ty.n_params() != 0 || function.ty.has_result() { return Err(Error::Validation(START_FUNC)); }
             let mut stack = Vec::with_capacity(64);
             let mut return_pc = 0usize;
             let mut control: Vec<ControlFrame> = Vec::new();
@@ -561,19 +567,19 @@ impl Instance {
 
     #[inline]
     fn setup_wasm_function_call(
-        func_info: &FunctionInfo,
+        function: &RuntimeFunction,
         stack: &mut Vec<WasmValue>,
         control: &mut Vec<ControlFrame>,
         fn_bases: &mut Vec<usize>,
         ctrl_bases: &mut Vec<usize>,
         return_dest: usize
     ) -> Result<usize, Error> {
-        let n_params = func_info.ty.n_params() as usize;
-        let has_result = func_info.ty.has_result();
+        let n_params = function.ty.n_params() as usize;
+        let has_result = function.ty.has_result();
         let locals_start = stack.len() - n_params;
 
         // Allocate space for local variables
-        for _ in 0..func_info.locals_count {
+        for _ in 0..function.locals_count {
             stack.push(WasmValue::default());
         }
 
@@ -595,7 +601,7 @@ impl Instance {
         ctrl_bases.push(control.len() - 1);
 
         // Return the function's start PC
-        Ok(func_info.wasm_fn.unwrap())
+        Ok(function.pc_start.unwrap())
     }
 
 
@@ -649,7 +655,7 @@ impl Instance {
             return Err(Error::Trap(STACK_EXHAUSTED));
         }
         let fi = &self.functions[idx];
-        if fi.wasm_fn.is_some() {
+        if fi.pc_start.is_some() {
             let pc_start = Self::setup_wasm_function_call(fi, stack, control, fn_bases, ctrl_bases, *return_pc)?;
             self.interpret(pc_start, stack, control, fn_bases, ctrl_bases)?;
         } else if let Some(host) = &fi.host {
@@ -932,7 +938,7 @@ impl Instance {
                 0x0b => { // end
                     crate::debug_println!("[ctrl] end: control_depth={}", control.len());
                     
-                    // Handle function frame end - special case
+                    // Check if we're at a function boundary
                     if let Some(&frame_idx) = ctrl_bases.last() {
                         if frame_idx == control.len().saturating_sub(1) {
                             if Instance::branch(&mut pc, stack, control, 0) {
@@ -942,19 +948,21 @@ impl Instance {
                             }
                             ctrl_bases.pop();
                             let _ = fn_bases.pop();
+                            continue; // Skip the regular block logic
                         }
                     }
-
-                    let Some(target) = control.pop() else {
-                        return Ok(());
-                    };
-
-                    if target.has_result {
-                        let result = stack[stack.len() - 1];
-                        stack.truncate(target.stack_len);
-                        stack.push(result);
+                    
+                    // Regular block end (not a function boundary)
+                    if let Some(target) = control.pop() {
+                        if target.has_result {
+                            let result = stack[stack.len() - 1];
+                            stack.truncate(target.stack_len);
+                            stack.push(result);
+                        } else {
+                            stack.truncate(target.stack_len);
+                        }
                     } else {
-                        stack.truncate(target.stack_len);
+                        return Ok(()); // No more control frames
                     }
                 }
                 0x0c => { // br
@@ -1011,7 +1019,7 @@ impl Instance {
                         } else {
                             return Err(Error::Trap(FUNC_NO_IMPL));
                         }
-                    } else if f.wasm_fn.is_some() {
+                    } else if f.pc_start.is_some() {
                         pc = Self::setup_wasm_function_call(f, stack, control, fn_bases, ctrl_bases, pc)?;
                     } else if let Some(host) = &f.host {
                         let params_start = stack.len() - f.ty.n_params() as usize;
@@ -1023,7 +1031,6 @@ impl Instance {
                 0x11 => { // call_indirect
                     let type_idx: u32 = read_leb128(bytes, &mut pc)?;
                     pc += 1; // Skip the zero flag
-                    let table_idx: u32 = 0;
                     let elem_idx = match stack.pop() {
                         Some(v) => v.as_u32(),
                         None => return Err(Error::Trap(STACK_UNDERFLOW))
@@ -1110,7 +1117,7 @@ impl Instance {
                         } else {
                             return Err(Error::Trap(FUNC_NO_IMPL));
                         }
-                    } else if callee.wasm_fn.is_some() {
+                    } else if callee.pc_start.is_some() {
                         pc = Self::setup_wasm_function_call(&callee, stack, control, fn_bases, ctrl_bases, pc)?;
                     } else if let Some(host) = &callee.host {
                         let params_start = stack.len() - callee.ty.n_params() as usize;
@@ -1403,5 +1410,42 @@ impl Instance {
 
         *pc = target.dest_pc;
         control.is_empty()
+    }
+
+    pub fn invoke(&self, func: &RuntimeFunction, args: &[WasmValue]) -> Result<Vec<WasmValue>, Error> {
+        let n_params = func.ty.n_params() as usize;
+        if n_params != args.len() { return Err(Error::Trap(INVALID_NUM_ARG)); }
+
+        let mut stack: Vec<WasmValue> = Vec::with_capacity(1024);
+        for v in args { stack.push(*v); }
+        let mut control: Vec<ControlFrame> = Vec::new();
+        let mut fn_bases: Vec<usize> = Vec::new();
+        let return_pc: usize = 0;
+
+        // Execute in the correct instance: if this RuntimeFunction has an owner,
+        // delegate invocation to that instance.
+        if let (Some(owner_weak), Some(owner_idx)) = (&func.owner, func.owner_index) {
+            if let Some(owner_rc) = owner_weak.upgrade() {
+                let mut owned_stack = Vec::with_capacity(64);
+                owned_stack.extend_from_slice(args);
+                let mut control: Vec<ControlFrame> = Vec::new();
+                let mut return_pc: usize = 0;
+                let mut fn_bases: Vec<usize> = Vec::new();
+                let mut ctrl_bases = vec![];
+                owner_rc.call_function_index(owner_idx, &mut return_pc, &mut owned_stack, &mut control, &mut fn_bases, &mut ctrl_bases)?;
+                return Ok(owned_stack);
+            }
+        }
+
+        if func.pc_start.is_some() {
+            let mut ctrl_bases = Vec::new();
+            let pc_start = Self::setup_wasm_function_call(func, &mut stack, &mut control, &mut fn_bases, &mut ctrl_bases, return_pc)?;
+            self.interpret(pc_start, &mut stack, &mut control, &mut fn_bases, &mut ctrl_bases)?;
+        } else if let Some(host) = &func.host {
+            Self::call_host_function(host.as_ref(), func.ty, &mut stack, 0);
+        } else {
+            return Err(Error::Trap(FUNC_NO_IMPL));
+        }
+        Ok(stack)
     }
 }
