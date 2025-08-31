@@ -734,15 +734,26 @@ impl Instance {
             }};
         }
         macro_rules! minmax {
-            ($type:ident, $f:ident) => {{
+            ($type:ident, min) => {{ minmax!(@impl $type, min, true) }};
+            ($type:ident, max) => {{ minmax!(@impl $type, max, false) }};
+            (@impl $type:ident, $op:ident, $want_negative:literal) => {{
                 paste! {
                     let b = pop_val!().[<as_ $type>]();
                     let a = pop_val!().[<as_ $type>]();
-                    if a.is_nan() || b.is_nan() {
-                        stack.push(WasmValue::[<from_ $type>]($type::NAN));
+
+                    let result = if a.is_nan() {
+                        a
+                    } else if b.is_nan() {
+                        b
+                    } else if a == b && a == 0.0 {
+                        const SIGN_BIT_SHIFT: usize = std::mem::size_of::<$type>() * 8 - 1;
+                        let a_has_sign = a.to_bits() >> SIGN_BIT_SHIFT != 0;
+                        if a_has_sign == $want_negative { a } else { b }
                     } else {
-                        stack.push(WasmValue::[<from_ $type>]($type::$f(a, b)));
-                    }
+                        a.$op(b)
+                    };
+
+                    stack.push(WasmValue::[<from_ $type>](result));
                 }
             }};
         }
