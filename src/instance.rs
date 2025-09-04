@@ -266,7 +266,7 @@ pub enum RuntimeFunction {
 }
 
 impl RuntimeFunction {
-    pub fn ty(&self) -> RuntimeSignature {
+    pub fn signature(&self) -> RuntimeSignature {
         match self {
             RuntimeFunction::Wasm { runtime_sig, .. } => *runtime_sig,
             RuntimeFunction::Host { runtime_sig, .. } => *runtime_sig,
@@ -274,7 +274,7 @@ impl RuntimeFunction {
     }
     
     pub fn param_count(&self) -> usize {
-        self.ty().n_params() as usize
+        self.signature().n_params() as usize
     }
 
     pub fn new_host(
@@ -384,7 +384,7 @@ impl Instance {
                     let runtime_sig = RuntimeSignature::from_signature(&function.ty);
                     match imported {
                         ExportValue::Function(f) => {
-                            if f.ty() != runtime_sig { return Err(Error::Link(INCOMPATIBLE_IMPORT)); }
+                            if f.signature() != runtime_sig { return Err(Error::Link(INCOMPATIBLE_IMPORT)); }
                             inst.functions.push(f.clone());
                         }
                         _ => return Err(Error::Link(INCOMPATIBLE_IMPORT)),
@@ -539,7 +539,7 @@ impl Instance {
         if module.start != u32::MAX {
             let fi = module.start as usize;
             let function = &inst_rc.functions[fi];
-            if function.ty().n_params() != 0 || function.ty().has_result() { return Err(Error::Validation(START_FUNC)); }
+            if function.signature().n_params() != 0 || function.signature().has_result() { return Err(Error::Validation(START_FUNC)); }
             let mut stack = Vec::with_capacity(64);
             let mut return_pc = 0usize;
             let mut control: Vec<ControlFrame> = Vec::new();
@@ -1083,7 +1083,7 @@ impl Instance {
                         InstanceManager::with(|mgr| {
                             if let Some(owner) = mgr.get_instance(owner_id) {
                                 let callee = &owner.functions[func_idx];
-                                sig_ok = callee.ty() == expected;
+                                sig_ok = callee.signature() == expected;
                                 if sig_ok {
                                     let n_params = callee.param_count();
                                     let params_start = stack.len() - n_params;
@@ -1115,7 +1115,7 @@ impl Instance {
                     }
 
                     let callee = self.functions[func_idx].clone();
-                    if callee.ty() != expected {
+                    if callee.signature() != expected {
                         return Err(Error::Trap(INDIRECT_CALL_MISMATCH));
                     }
 
