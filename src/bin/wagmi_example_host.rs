@@ -8,52 +8,103 @@ use utils::load_resource_module;
 
 struct HostState {
     call_count: RefCell<u32>,
-    last_printed: RefCell<Option<i32>>,
+    counter: RefCell<i32>,
+    call_sequence: RefCell<Vec<String>>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host_state = Rc::new(HostState {
         call_count: RefCell::new(0),
-        last_printed: RefCell::new(None),
+        counter: RefCell::new(0),
+        call_sequence: RefCell::new(Vec::new()),
     });
     
     let state_clone = host_state.clone();
     let print_fn = RuntimeFunction::new_host(
-        vec![ValType::I32],  // params
-        None,                // no result
+        vec![ValType::I32],
+        None,
         move |args| {
             let value = args[0].as_i32();
-            println!("  [Host Print] Value: {}", value);
-            *state_clone.last_printed.borrow_mut() = Some(value);
+            println!("  [Host:print] {}", value);
+            state_clone.call_sequence.borrow_mut().push(format!("print({})", value));
             *state_clone.call_count.borrow_mut() += 1;
             None
         }
     );
     
+    let state_clone = host_state.clone();
     let random_fn = RuntimeFunction::new_host(
-        vec![],                     // no params
-        Some(ValType::I32),         // returns i32
-        |_args| {
+        vec![],
+        Some(ValType::I32),
+        move |_args| {
             use std::time::{SystemTime, UNIX_EPOCH};
             let seed = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .subsec_nanos() as i32;
-            let random = (seed ^ 0x5DEECE66Di64 as i32) % 100;
-            println!("  [Host Random] Generated: {}", random);
+            let random = ((seed ^ 0x5DEECE66Di64 as i32) % 50).abs();
+            println!("  [Host:random] → {}", random);
+            state_clone.call_sequence.borrow_mut().push(format!("random() -> {}", random));
+            *state_clone.call_count.borrow_mut() += 1;
             Some(WasmValue::from_i32(random))
         }
     );
     
+    let state_clone = host_state.clone();
     let add_fn = RuntimeFunction::new_host(
-        vec![ValType::I32, ValType::I32],  // two i32 params
-        Some(ValType::I32),                // returns i32
-        |args| {
+        vec![ValType::I32, ValType::I32],
+        Some(ValType::I32),
+        move |args| {
             let a = args[0].as_i32();
             let b = args[1].as_i32();
             let result = a + b;
-            println!("  [Host Add] {} + {} = {}", a, b, result);
+            println!("  [Host:add] {} + {} = {}", a, b, result);
+            state_clone.call_sequence.borrow_mut().push(format!("add({}, {}) -> {}", a, b, result));
+            *state_clone.call_count.borrow_mut() += 1;
             Some(WasmValue::from_i32(result))
+        }
+    );
+    
+    let state_clone = host_state.clone();
+    let mul_fn = RuntimeFunction::new_host(
+        vec![ValType::I32, ValType::I32],
+        Some(ValType::I32),
+        move |args| {
+            let a = args[0].as_i32();
+            let b = args[1].as_i32();
+            let result = a * b;
+            println!("  [Host:mul] {} * {} = {}", a, b, result);
+            state_clone.call_sequence.borrow_mut().push(format!("mul({}, {}) -> {}", a, b, result));
+            *state_clone.call_count.borrow_mut() += 1;
+            Some(WasmValue::from_i32(result))
+        }
+    );
+    
+    let state_clone = host_state.clone();
+    let counter_inc_fn = RuntimeFunction::new_host(
+        vec![],
+        Some(ValType::I32),
+        move |_args| {
+            let mut counter = state_clone.counter.borrow_mut();
+            *counter += 1;
+            let value = *counter;
+            println!("  [Host:counter++] → {}", value);
+            state_clone.call_sequence.borrow_mut().push(format!("counter++ -> {}", value));
+            *state_clone.call_count.borrow_mut() += 1;
+            Some(WasmValue::from_i32(value))
+        }
+    );
+    
+    let state_clone = host_state.clone();
+    let counter_get_fn = RuntimeFunction::new_host(
+        vec![],
+        Some(ValType::I32),
+        move |_args| {
+            let value = *state_clone.counter.borrow();
+            println!("  [Host:counter] → {}", value);
+            state_clone.call_sequence.borrow_mut().push(format!("counter -> {}", value));
+            *state_clone.call_count.borrow_mut() += 1;
+            Some(WasmValue::from_i32(value))
         }
     );
     
@@ -62,6 +113,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     host_module.insert("print".to_string(), ExportValue::Function(print_fn));
     host_module.insert("random".to_string(), ExportValue::Function(random_fn));
     host_module.insert("add".to_string(), ExportValue::Function(add_fn));
+    host_module.insert("mul".to_string(), ExportValue::Function(mul_fn));
+    host_module.insert("counter_inc".to_string(), ExportValue::Function(counter_inc_fn));
+    host_module.insert("counter_get".to_string(), ExportValue::Function(counter_get_fn));
     imports.insert("host".to_string(), host_module);
     
     let wasm_bytes = load_resource_module("host_imports")?;
@@ -69,29 +123,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let module = Rc::new(module);
     let instance = Instance::instantiate(module, &imports)?;
     
-    
     if let Some(ExportValue::Function(main_func)) = instance.exports.get("main") {
+        println!("Calling main():");
         let results = instance.invoke(main_func, &[])?;
-        println!("main() returned: {}", results[0].as_i32());
+        println!("→ returned: {}\n", results[0].as_i32());
     }
     
-    if let Some(ExportValue::Function(print_random)) = instance.exports.get("print_random") {
-        let results = instance.invoke(print_random, &[])?;
-        println!("print_random() returned: {}", results[0].as_i32());
-        
-        let results = instance.invoke(print_random, &[])?;
-        println!("print_random() returned: {}", results[0].as_i32());
+    if let Some(ExportValue::Function(func)) = instance.exports.get("sequence") {
+        println!("Calling sequence():");
+        let results = instance.invoke(func, &[])?;
+        println!("→ returned: {}\n", results[0].as_i32());
     }
     
-    if let Some(ExportValue::Function(random_calc)) = instance.exports.get("random_calculation") {
-        let results = instance.invoke(random_calc, &[])?;
-        println!("random_calculation() returned: {}", results[0].as_i32());
+    if let Some(ExportValue::Function(func)) = instance.exports.get("nested_calls") {
+        println!("Calling nested_calls():");
+        let results = instance.invoke(func, &[])?;
+        println!("→ returned: {}\n", results[0].as_i32());
     }
     
+    if let Some(ExportValue::Function(func)) = instance.exports.get("stateful") {
+        println!("Calling stateful():");
+        let results = instance.invoke(func, &[])?;
+        println!("→ returned: {}\n", results[0].as_i32());
+    }
     
-    println!("Total host.print() calls: {}", *host_state.call_count.borrow());
-    if let Some(last) = *host_state.last_printed.borrow() {
-        println!("Last printed value: {}", last);
+    println!("=== Summary ===");
+    println!("Total host calls: {}", *host_state.call_count.borrow());
+    println!("Final counter: {}", *host_state.counter.borrow());
+    
+    if !host_state.call_sequence.borrow().is_empty() {
+        println!("\nCall sequence:");
+        for (i, call) in host_state.call_sequence.borrow().iter().enumerate() {
+            println!("  {}. {}", i + 1, call);
+        }
     }
     
     Ok(())
