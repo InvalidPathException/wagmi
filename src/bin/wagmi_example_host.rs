@@ -1,7 +1,7 @@
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use wagmi::{Module, Instance, Imports, ExportValue, WasmValue, RuntimeFunction, RuntimeType, Signature, ValType};
+use wagmi::{Module, Instance, Imports, ExportValue, WasmValue, RuntimeFunction, ValType};
 
 mod utils;
 use utils::load_resource_module;
@@ -11,89 +11,51 @@ struct HostState {
     last_printed: RefCell<Option<i32>>,
 }
 
-fn create_host_print(state: Rc<HostState>) -> RuntimeFunction {
-    let signature = Signature {
-        params: vec![ValType::I32],
-        result: None,
-    };
-    
-    let host_fn = Rc::new(move |args: &mut [WasmValue]| {
-        let value = args[0].as_i32();
-        println!("  [Host Print] Value: {}", value);
-        *state.last_printed.borrow_mut() = Some(value);
-        *state.call_count.borrow_mut() += 1;
-    });
-    
-    RuntimeFunction {
-        ty: RuntimeType::from_signature(&signature),
-        pc_start: None,
-        locals_count: 0,
-        owner: None,
-        owner_idx: None,
-        host: Some(host_fn),
-    }
-}
-
-fn create_host_random() -> RuntimeFunction {
-    let signature = Signature {
-        params: vec![],
-        result: Some(ValType::I32),
-    };
-    
-    let host_fn = Rc::new(move |args: &mut [WasmValue]| {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos() as i32;
-        let random = (seed ^ 0x5DEECE66Di64 as i32) % 100;
-        println!("  [Host Random] Generated: {}", random);
-        args[0] = WasmValue::from_i32(random);
-    });
-    
-    RuntimeFunction {
-        ty: RuntimeType::from_signature(&signature),
-        pc_start: None,
-        locals_count: 0,
-        owner: None,
-        owner_idx: None,
-        host: Some(host_fn),
-    }
-}
-
-fn create_host_add() -> RuntimeFunction {
-    let signature = Signature {
-        params: vec![ValType::I32, ValType::I32],
-        result: Some(ValType::I32),
-    };
-    
-    let host_fn = Rc::new(move |args: &mut [WasmValue]| {
-        let a = args[0].as_i32();
-        let b = args[1].as_i32();
-        let result = a + b;
-        println!("  [Host Add] {} + {} = {}", a, b, result);
-        args[0] = WasmValue::from_i32(result);
-    });
-    
-    RuntimeFunction {
-        ty: RuntimeType::from_signature(&signature),
-        pc_start: None,
-        locals_count: 0,
-        owner: None,
-        owner_idx: None,
-        host: Some(host_fn),
-    }
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host_state = Rc::new(HostState {
         call_count: RefCell::new(0),
         last_printed: RefCell::new(None),
     });
     
-    let print_fn = create_host_print(host_state.clone());
-    let random_fn = create_host_random();
-    let add_fn = create_host_add();
+    let state_clone = host_state.clone();
+    let print_fn = RuntimeFunction::new_host(
+        vec![ValType::I32],  // params
+        None,                // no result
+        move |args| {
+            let value = args[0].as_i32();
+            println!("  [Host Print] Value: {}", value);
+            *state_clone.last_printed.borrow_mut() = Some(value);
+            *state_clone.call_count.borrow_mut() += 1;
+            None
+        }
+    );
+    
+    let random_fn = RuntimeFunction::new_host(
+        vec![],                     // no params
+        Some(ValType::I32),         // returns i32
+        |_args| {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let seed = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos() as i32;
+            let random = (seed ^ 0x5DEECE66Di64 as i32) % 100;
+            println!("  [Host Random] Generated: {}", random);
+            Some(WasmValue::from_i32(random))
+        }
+    );
+    
+    let add_fn = RuntimeFunction::new_host(
+        vec![ValType::I32, ValType::I32],  // two i32 params
+        Some(ValType::I32),                // returns i32
+        |args| {
+            let a = args[0].as_i32();
+            let b = args[1].as_i32();
+            let result = a + b;
+            println!("  [Host Add] {} + {} = {}", a, b, result);
+            Some(WasmValue::from_i32(result))
+        }
+    );
     
     let mut imports = Imports::new();
     let mut host_module = HashMap::new();

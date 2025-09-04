@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs, path::Path, process::Command, rc::{Rc}, cell::RefCell, env};
 use serde::Deserialize;
-use wagmi::{Module, Instance, Imports, ExportValue, WasmValue, WasmGlobal, WasmTable, WasmMemory, RuntimeFunction, RuntimeType, ValType, Error, Signature};
+use wagmi::{Module, Instance, Imports, ExportValue, WasmValue, WasmGlobal, WasmTable, WasmMemory, RuntimeFunction, RuntimeSignature, ValType, Error, Signature};
 
 #[derive(Deserialize, Clone)]
 struct ValueJSON { 
@@ -81,20 +81,21 @@ fn externalized_exports_for(inst: &Rc<Instance>) -> HashMap<String, ExportValue>
         if matches!(ex.extern_type, wagmi::module::ExternType::Func) {
             let fi = ex.idx as usize;
             let src = inst.functions[fi].clone();
-            if src.host.is_some() {
-                out.insert(name.clone(), ExportValue::Function(src));
-            } else {
-                // For wasm-backed exports, expose an owner handle that
-                // delegates execution into the owning instance
-                let ty = src.ty;
-                out.insert(name.clone(), ExportValue::Function(RuntimeFunction {
-                    ty,
-                    pc_start: None,
-                    locals_count: 0,
-                    host: None,
-                    owner: Some(weak.clone()),
-                    owner_idx: Some(fi),
-                }));
+            match src {
+                RuntimeFunction::Host { .. } => {
+                    out.insert(name.clone(), ExportValue::Function(src));
+                }
+                RuntimeFunction::Wasm { runtime_sig: ty, .. } => {
+                    // For wasm-backed exports, expose an owner handle that
+                    // delegates execution into the owning instance
+                    out.insert(name.clone(), ExportValue::Function(RuntimeFunction::Wasm {
+                        runtime_sig: ty,
+                        pc_start: 0,  // Not used for cross-instance calls
+                        locals_count: 0,
+                        owner: Some(weak.clone()),
+                        owner_idx: Some(fi),
+                    }));
+                }
             }
         }
     }
@@ -127,14 +128,10 @@ fn spectest_exports() -> HashMap<String, ExportValue> {
     
     // Print functions (no-ops for testing)
     let make_fn = |sig: Signature| {
-        let ty = RuntimeType::from_signature(&sig);
-        ExportValue::Function(RuntimeFunction {
-            ty, 
-            pc_start: None,
-            locals_count: 0, 
-            host: Some(Rc::new(|_| {})), 
-            owner: None, 
-            owner_idx: None
+        let ty = RuntimeSignature::from_signature(&sig);
+        ExportValue::Function(RuntimeFunction::Host {
+            callback: Rc::new(|_| None),
+            runtime_sig: ty,
         })
     };
     

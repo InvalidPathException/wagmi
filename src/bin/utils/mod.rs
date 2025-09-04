@@ -42,6 +42,7 @@ pub fn compile_wat(wat_path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error
 }
 
 /// Loads and compiles a resource WAT file
+#[allow(dead_code)]
 pub fn load_resource_module(name: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("src/bin/resources")

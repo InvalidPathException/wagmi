@@ -148,7 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (name, export) in exports {
             match export {
                 ExportValue::Function(func) => {
-                    println!("  {} : function (params: {}, result: {})", name, func.ty.n_params(), if func.ty.has_result() { "yes" } else { "no" });
+                    println!("  {} : function (params: {}, result: {})", name, func.ty().n_params(), if func.ty().has_result() { "yes" } else { "no" });
                 }
                 ExportValue::Table(table) => {
                     let t = table.borrow();

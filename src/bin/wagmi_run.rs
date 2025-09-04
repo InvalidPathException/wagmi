@@ -134,13 +134,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (name, export) in &instance.exports {
             if let ExportValue::Function(func) = export {
                 print!("  {} (", name);
-                let n_params = func.ty.n_params();
+                let n_params = func.ty().n_params();
                 for i in 0..n_params {
                     if i > 0 { print!(", "); }
                     print!("param{}", i);
                 }
                 print!(")");
-                if func.ty.has_result() {
+                if func.ty().has_result() {
                     print!(" -> result");
                 }
                 println!();
@@ -168,11 +168,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wasm_args.push(parse_value(arg_str)?);
     }
     
-    if wasm_args.len() != func.ty.n_params() as usize {
+    if wasm_args.len() != func.ty().n_params() as usize {
         return Err(format!(
             "Function '{}' expects {} arguments, but {} provided",
             func_name,
-            func.ty.n_params(),
+            func.ty().n_params(),
             wasm_args.len()
         ).into());
     }
