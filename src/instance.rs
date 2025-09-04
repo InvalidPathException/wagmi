@@ -257,7 +257,7 @@ pub enum RuntimeFunction {
         locals_count: usize,
         // For cross-instance calls, weak is to avoid cycles
         owner: Option<Weak<Instance>>,
-        owner_idx: Option<usize>,
+        function_index: Option<usize>,
     },
     Host {
         callback: Rc<dyn Fn(&[WasmValue]) -> Option<WasmValue>>,
@@ -396,7 +396,7 @@ impl Instance {
                         pc_start: function.body.start, 
                         locals_count, 
                         owner: None, 
-                        owner_idx: None 
+                        function_index: None
                     });
                 }
             }
@@ -481,7 +481,7 @@ impl Instance {
                         let func_idx = *idx as usize;
                         let f = inst.functions[func_idx].clone();
                         let (owner_id, owner_func_idx) = match &f {
-                            RuntimeFunction::Wasm { owner, owner_idx, .. } => {
+                            RuntimeFunction::Wasm { owner, function_index: owner_idx, .. } => {
                                 if let (Some(weak_owner), Some(idx)) = (owner, owner_idx) {
                                     if let Some(owner_rc) = weak_owner.upgrade() { 
                                         (owner_rc.id, *idx as u32) 
@@ -649,7 +649,7 @@ impl Instance {
         }
         let fi = &self.functions[idx];
         match fi {
-            RuntimeFunction::Wasm { runtime_sig, pc_start, locals_count, owner, owner_idx } => {
+            RuntimeFunction::Wasm { runtime_sig, pc_start, locals_count, owner, function_index: owner_idx } => {
                 if let (Some(owner_weak), Some(owner_idx)) = (owner, owner_idx) {
                     // Cross-instance call
                     if let Some(owner_rc) = owner_weak.upgrade() {
@@ -1013,7 +1013,7 @@ impl Instance {
                     let f = &self.functions[fi as usize];
                     
                     match f {
-                        RuntimeFunction::Wasm { runtime_sig, pc_start, locals_count, owner, owner_idx } => {
+                        RuntimeFunction::Wasm { runtime_sig, pc_start, locals_count, owner, function_index: owner_idx } => {
                             if let (Some(owner_weak), Some(idx)) = (owner, owner_idx) {
                                 if let Some(owner_rc) = owner_weak.upgrade() {
                                     let n_params = runtime_sig.n_params() as usize;
@@ -1120,7 +1120,7 @@ impl Instance {
                     }
 
                     match callee {
-                        RuntimeFunction::Wasm { runtime_sig, pc_start, locals_count, owner, owner_idx } => {
+                        RuntimeFunction::Wasm { runtime_sig, pc_start, locals_count, owner, function_index: owner_idx } => {
                             if let (Some(owner_weak), Some(idx)) = (&owner, owner_idx) {
                                 if let Some(owner_rc) = owner_weak.upgrade() {
                                     let n_params = runtime_sig.n_params() as usize;
@@ -1450,7 +1450,7 @@ impl Instance {
         let return_pc: usize = 0;
 
         match func {
-            RuntimeFunction::Wasm { runtime_sig, pc_start, locals_count, owner, owner_idx } => {
+            RuntimeFunction::Wasm { runtime_sig, pc_start, locals_count, owner, function_index: owner_idx } => {
                 // Execute in the correct instance: if this Function has an owner,
                 // delegate invocation to that instance.
                 if let (Some(owner_weak), Some(idx)) = (owner, owner_idx) {

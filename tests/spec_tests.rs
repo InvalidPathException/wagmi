@@ -93,7 +93,7 @@ fn externalized_exports_for(inst: &Rc<Instance>) -> HashMap<String, ExportValue>
                         pc_start: 0,  // Not used for cross-instance calls
                         locals_count: 0,
                         owner: Some(weak.clone()),
-                        owner_idx: Some(fi),
+                        function_index: Some(fi),
                     }));
                 }
             }
