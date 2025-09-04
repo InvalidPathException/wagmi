@@ -25,18 +25,3 @@ pub use wasm_memory::WasmMemory;
 
 // Utility types
 pub use error::Error;
-
-// Debug macro that only prints when wasm_debug feature is enabled
-#[cfg(feature = "wasm_debug")]
-macro_rules! debug_println {
-    ($($arg:tt)*) => {
-        eprintln!($($arg)*);
-    };
-}
-
-#[cfg(not(feature = "wasm_debug"))]
-macro_rules! debug_println {
-    ($($arg:tt)*) => {};
-}
-
-pub(crate) use debug_println;

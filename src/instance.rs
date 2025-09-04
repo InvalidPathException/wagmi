@@ -444,14 +444,9 @@ impl Instance {
             // Apply element segments now that data segments have been validated
             if let Some(collected) = collected_elements {
                 let table_rc = inst.table.as_ref().ok_or(Error::Link(UNKNOWN_TABLE))?.clone();
-                #[cfg(feature = "wasm_debug")]
-                {
-                    let sz = table_rc.borrow().size();
-                    crate::debug_println!("[elem] table size={} segments={} ", sz, collected.len());
-                }
                 for (offset, indices) in collected.iter() {
-                    for (j, idx_fn) in indices.iter().enumerate() {
-                        let func_idx = *idx_fn as usize;
+                    for (j, idx) in indices.iter().enumerate() {
+                        let func_idx = *idx as usize;
                         let f = inst.functions[func_idx].clone();
                         let (owner_id, owner_func_idx) = if let (Some(weak_owner), Some(owner_idx)) = (f.owner.clone(), f.owner_idx) {
                             if let Some(owner_rc) = weak_owner.upgrade() { (owner_rc.id, owner_idx as u32) } else { (inst.id, func_idx as u32) }
@@ -895,10 +890,7 @@ impl Instance {
                 0x01 | 0xbc | 0xbd | 0xbe | 0xbf => {} // nop and reinterprets (no-op on raw bits)
                 0x02 => { // block
                     let sig = Signature::read(&self.module.types, bytes, &mut pc)?;
-                    crate::debug_println!("[ctrl] enter block: pc_after_bt={} (0x{:x})", pc, pc);
-                    debug_assert!(self.module.block_ends.contains_key(&pc), "missing block end mapping for key {}", pc);
                     let block_end = *self.module.block_ends.get(&pc).unwrap();
-                    crate::debug_println!("[ctrl]   block_end={} (0x{:x})", block_end, block_end);
                     control.push(ControlFrame {
                         stack_len: stack.len() - sig.params.len(),
                         dest_pc: block_end,
@@ -909,7 +901,6 @@ impl Instance {
                 0x03 => { // loop
                     let loop_op_pc = pc - 1;
                     let sig = Signature::read(&self.module.types, bytes, &mut pc)?;
-                    crate::debug_println!("[ctrl] enter loop: loop_op_pc={} (0x{:x}) pc_after_bt={} (0x{:x})", loop_op_pc, loop_op_pc, pc, pc);
                     control.push(ControlFrame {
                         stack_len: stack.len() - sig.params.len(),
                         dest_pc: loop_op_pc,
@@ -920,10 +911,7 @@ impl Instance {
                 0x04 => { // if
                     let sig = Signature::read(&self.module.types, bytes, &mut pc)?;
                     let cond = pop_val!().as_u32();
-                    crate::debug_println!("[ctrl] enter if: pc_after_bt={} (0x{:x}) cond={}", pc, pc, cond);
-                    debug_assert!(self.module.if_jumps.contains_key(&pc), "missing if jump mapping for key {}", pc);
                     let if_jump = self.module.if_jumps.get(&pc).unwrap();
-                    crate::debug_println!("[ctrl]   else_offset={} (0x{:x}) end_offset={} (0x{:x})", if_jump.else_offset, if_jump.else_offset, if_jump.end_offset, if_jump.end_offset);
                     control.push(ControlFrame {
                         stack_len: stack.len() - sig.params.len(),
                         dest_pc: if_jump.end_offset,
@@ -933,12 +921,9 @@ impl Instance {
                     if cond == 0 { pc = if_jump.else_offset; }
                 }
                 0x05 => { // else
-                    crate::debug_println!("[ctrl] else: simulating br depth 0");
                     let _ = Instance::branch(&mut pc, stack, control, 0);
                 }
                 0x0b => { // end
-                    crate::debug_println!("[ctrl] end: control_depth={}", control.len());
-                    
                     // Check if we're at a function boundary
                     if let Some(&frame_idx) = ctrl_bases.last() {
                         if frame_idx == control.len().saturating_sub(1) {

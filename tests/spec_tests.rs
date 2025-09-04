@@ -375,8 +375,7 @@ fn run_test_file(json_path: &Path, wast_name: &str) -> Result<(u32, u32, u32), S
             Ok(()) => passes += 1,
             Err(e) if e.starts_with("message mismatch") => {
                 message_mismatches += 1;
-                // Always print details for debugging
-                eprintln!("[{}:{}] {}", wast_name, 
+                eprintln!("[{}:{}] {}", wast_name,
                     match cmd {
                         TestCmd::Module { line, .. } => line,
                         TestCmd::Register { line, .. } => line,
@@ -489,7 +488,6 @@ fn run_spec_tests() {
                 total_passes += passes;
                 total_mismatches += message_mismatches;
                 total_failures += failures;
-                // Always show stats for each test file
                 println!("  {} passed, {} had error message mismatch, {} failed", passes, message_mismatches, failures);
             }
             Err(e) => {
