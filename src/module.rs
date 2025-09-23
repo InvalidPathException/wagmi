@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use nohash_hasher::BuildNoHashHasher;
 use std::rc::Rc;
 
 use crate::byte_iter::*;
@@ -67,8 +68,14 @@ pub struct Export { pub extern_type: ExternType, pub idx: u32 }
 #[derive(Clone)]
 pub struct DataSegment { pub data_range: std::ops::Range<usize>, pub initializer_offset: usize }
 
-#[derive(Clone, Copy)]
-pub struct IfJump { pub else_offset: usize, pub end_offset: usize }
+#[derive(Clone, Copy, Default)]
+pub struct SideTableEntry {
+    pub params_len: u16,
+    pub has_result: bool,
+    pub body_pc: u32,   // start pc of block body (after the sig)
+    pub end_pc: u32,    // end pc of the construct
+    pub else_pc: u32,   // else start pc or end_pc if no else
+}
 
 // ---------------- Module Structure ----------------
 #[derive(Default)]
@@ -86,8 +93,7 @@ pub struct Module {
     pub functions: Vec<Function>,
     pub n_data: u32,
     pub data_segments: Vec<DataSegment>,
-    pub if_jumps: HashMap<usize, IfJump>,
-    pub block_ends: HashMap<usize, usize>,
+    pub side_table: HashMap<u32, SideTableEntry, BuildNoHashHasher<u32>>,
 }
 
 impl Module {

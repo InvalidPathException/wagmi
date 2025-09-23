@@ -24,6 +24,7 @@ pub struct ControlFrame {
     pub height: usize,
     pub unreachable: bool,
     pub control_type: ControlType,
+    pub sig_pc: usize,
 }
 
 // ---------------- ValidatorStack for Type Checking ----------------
@@ -78,12 +79,13 @@ impl ValidatorStack {
         Ok(popped)
     }
 
-    pub fn push_ctrl(&mut self, sig: Signature, control_type: ControlType) -> Result<(), Error> {
+    pub fn push_ctrl(&mut self, sig: Signature, control_type: ControlType, sig_pc: usize) -> Result<(), Error> {
         let frame = ControlFrame {
             sig: sig.clone(),
             height: self.val_stack.len(),
             unreachable: false,
             control_type,
+            sig_pc,
         };
         self.ctrl_stack.push(frame);
         self.push_vals(&sig.params);
@@ -188,7 +190,8 @@ impl<'a> Validator<'a> {
             sig: func.ty.clone(), 
             height: func.ty.params.len(),  // Stack height after params
             unreachable: false,
-            control_type: ControlType::Function 
+            control_type: ControlType::Function,
+            sig_pc: func.body.start.saturating_sub(1),
         });
 
         // Validation loop
@@ -229,27 +232,58 @@ fn validate_nop(_: &mut Module, _: &mut ByteIter, _: &Function, _: &mut Validato
     Ok(Action::Continue)
 }
 
-fn validate_block(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut ValidatorStack) -> Result<Action, Error> {
+    fn validate_block(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut ValidatorStack) -> Result<Action, Error> {
+    let sig_pc = it.cur();
     let sig = Signature::read(&m.types, &m.bytes, &mut it.idx)?;
     let block_start = it.cur();
     vs.pop_vals(&sig.params)?;
-    vs.push_ctrl(sig, ControlType::Block { start: block_start })?;
+    let params_len = sig.params.len() as u16;
+    let has_result = sig.result.is_some();
+    vs.push_ctrl(sig, ControlType::Block { start: block_start }, sig_pc)?;
+    m.side_table.entry(sig_pc as u32).or_insert(SideTableEntry {
+        params_len,
+        has_result,
+        body_pc: block_start as u32,
+        end_pc: 0,
+        else_pc: 0,
+    });
     Ok(Action::Continue)
 }
 
-fn validate_loop(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut ValidatorStack) -> Result<Action, Error> {
+    fn validate_loop(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut ValidatorStack) -> Result<Action, Error> {
+    let sig_pc = it.cur();
     let sig = Signature::read(&m.types, &m.bytes, &mut it.idx)?;
+    let loop_body_pc = it.cur(); // body starts here
     vs.pop_vals(&sig.params)?;
-    vs.push_ctrl(sig, ControlType::Loop)?;
+    let params_len = sig.params.len() as u16;
+    let has_result = sig.result.is_some();
+    vs.push_ctrl(sig, ControlType::Loop, sig_pc)?;
+    m.side_table.entry(sig_pc as u32).or_insert(SideTableEntry {
+        params_len,
+        has_result,
+        body_pc: loop_body_pc as u32,
+        end_pc: 0,
+        else_pc: loop_body_pc as u32, // for loop back-edge
+    });
     Ok(Action::Continue)
 }
 
-fn validate_if(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut ValidatorStack) -> Result<Action, Error> {
+    fn validate_if(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut ValidatorStack) -> Result<Action, Error> {
+    let sig_pc = it.cur();
     let sig = Signature::read(&m.types, &m.bytes, &mut it.idx)?;
     vs.pop_val_expect(ValType::I32)?;
     vs.pop_vals(&sig.params)?;
-    let if_start = it.cur();
-    vs.push_ctrl(sig, ControlType::If { start: if_start })?;
+    let if_body_pc = it.cur();
+    let params_len = sig.params.len() as u16;
+    let has_result = sig.result.is_some();
+    vs.push_ctrl(sig, ControlType::If { start: if_body_pc }, sig_pc)?;
+    m.side_table.entry(sig_pc as u32).or_insert(SideTableEntry {
+        params_len,
+        has_result,
+        body_pc: if_body_pc as u32,
+        end_pc: 0,
+        else_pc: 0, // filled at else/end
+    });
     Ok(Action::Continue)
 }
 
@@ -288,6 +322,7 @@ fn validate_else(_: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut Valid
         height: frame.height,
         unreachable: false,
         control_type: new_control_type,
+        sig_pc: frame.sig_pc,
     });
     vs.push_vals(&params);
     Ok(Action::Continue)
@@ -317,11 +352,15 @@ fn validate_end(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Valida
     
     // Handle jump offset tracking
     match frame.control_type {
-        ControlType::Block { start } => {
-            m.block_ends.insert(start, it.cur());
+        ControlType::Block { .. } => {
+            let k = frame.sig_pc as u32;
+            let mut updated = m.side_table.get(&k).copied().unwrap_or_default();
+            updated.end_pc = it.cur() as u32;
+            updated.else_pc = updated.end_pc;
+            m.side_table.insert(k, updated);
         }
         ControlType::Loop => {}
-        ControlType::If { start } => {
+        ControlType::If { .. } => {
             // For if without else, params must equal results
             let results_as_vec: Vec<ValType> = frame.sig.result.into_iter().collect();
             if frame.sig.params != results_as_vec {
@@ -329,10 +368,18 @@ fn validate_end(m: &mut Module, it: &mut ByteIter, f: &Function, vs: &mut Valida
             }
             let else_off = it.cur() - 1;
             let end_off = it.cur();
-            m.if_jumps.insert(start, IfJump { else_offset: else_off, end_offset: end_off });
+            let k = frame.sig_pc as u32;
+            let mut updated = m.side_table.get(&k).copied().unwrap_or_default();
+            updated.end_pc = end_off as u32;
+            updated.else_pc = else_off as u32;
+            m.side_table.insert(k, updated);
         }
-        ControlType::IfElse { if_start, else_start } => {
-            m.if_jumps.insert(if_start, IfJump { else_offset: else_start, end_offset: it.cur() });
+        ControlType::IfElse { else_start, .. } => {
+            let k = frame.sig_pc as u32;
+            let mut updated = m.side_table.get(&k).copied().unwrap_or_default();
+            updated.end_pc = it.cur() as u32;
+            updated.else_pc = else_start as u32;
+            m.side_table.insert(k, updated);
         }
         ControlType::Function => {}
     }

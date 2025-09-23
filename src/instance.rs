@@ -5,7 +5,7 @@ use crate::signature::{Signature, ValType};
 use crate::wasm_memory::WasmMemory;
 use crate::Module;
 use paste::paste;
-use std::cell::RefCell;
+use std::cell::{RefCell, Cell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
@@ -244,7 +244,7 @@ impl WasmTable {
 pub struct WasmGlobal {
     pub ty: ValType,
     pub mutable: bool,
-    pub value: WasmValue,
+    pub value: Cell<WasmValue>,
 }
 
 // --------------- Imports/Exports and Functions ---------------
@@ -419,7 +419,7 @@ impl Instance {
                     // evaluate constant initializer
                     let mut cpc = g.initializer_offset;
                     let val = Instance::eval_const(&module, &mut cpc, &inst.globals)?;
-                    inst.globals.push(Rc::new(RefCell::new(WasmGlobal { ty: g.ty, mutable: g.is_mutable, value: val })));
+                    inst.globals.push(Rc::new(RefCell::new(WasmGlobal { ty: g.ty, mutable: g.is_mutable, value: Cell::new(val) })));
                 }
             }
 
@@ -578,7 +578,7 @@ impl Instance {
                 0x42 => { let v: i64 = read_sleb128(bytes, pc)?; stack.push(WasmValue::from_i64(v)); }
                 0x43 => { let bits = u32::from_le_bytes(bytes[*pc..*pc+4].try_into().unwrap()); *pc += 4; stack.push(WasmValue::from_f32_bits(bits)); }
                 0x44 => { let bits = u64::from_le_bytes(bytes[*pc..*pc+8].try_into().unwrap()); *pc += 8; stack.push(WasmValue::from_f64_bits(bits)); }
-                0x23 => { let gi: u32 = read_leb128(bytes, pc)?; let g = gi as usize; if g >= globals.len() { return Err(Error::Validation(UNKNOWN_GLOBAL)); } stack.push(globals[g].borrow().value); }
+                0x23 => { let gi: u32 = read_leb128(bytes, pc)?; let g = gi as usize; if g >= globals.len() { return Err(Error::Validation(UNKNOWN_GLOBAL)); } stack.push(globals[g].borrow().value.get()); }
                 0x6a => { let b = stack.pop().unwrap().as_u32(); let a = stack.pop().unwrap().as_u32(); stack.push(WasmValue::from_u32(a.wrapping_add(b))); }
                 0x6b => { let b = stack.pop().unwrap().as_u32(); let a = stack.pop().unwrap().as_u32(); stack.push(WasmValue::from_u32(a.wrapping_sub(b))); }
                 0x6c => { let b = stack.pop().unwrap().as_u32(); let a = stack.pop().unwrap().as_u32(); stack.push(WasmValue::from_u32(a.wrapping_mul(b))); }
@@ -685,6 +685,7 @@ impl Instance {
         ctrl_bases: &mut Vec<usize>
     ) -> Result<(), Error> {
         let bytes = &self.module.bytes;
+        let mem_opt = self.memory.as_ref();
 
         macro_rules! next_op { () => {{ let byte = bytes[pc]; pc += 1; byte }} }
         macro_rules! pop_val { () => {{
@@ -891,7 +892,7 @@ impl Instance {
             let _align: u32 = read_leb128(bytes, &mut pc)?;
             let offset: u32 = read_leb128(bytes, &mut pc)?;
             let addr = pop_val!().as_u32();
-            let mem = self.memory.as_ref().ok_or_else(|| Error::Validation(UNKNOWN_MEMORY))?;
+            let mem = mem_opt.ok_or_else(|| Error::Validation(UNKNOWN_MEMORY))?;
             let v = mem.borrow().$method(addr, offset).map_err(|e| Error::Trap(e))?;
             let val = ($push)(v);
             stack.push(val);
@@ -902,7 +903,7 @@ impl Instance {
             let raw = pop_val!();
             let addr = pop_val!().as_u32();
             let val = ($from)(raw);
-            let mem = self.memory.as_ref().ok_or_else(|| Error::Validation(UNKNOWN_MEMORY))?;
+            let mem = mem_opt.ok_or_else(|| Error::Validation(UNKNOWN_MEMORY))?;
             mem.borrow_mut().$method(addr, offset, val).map_err(|e| Error::Trap(e))?;
         }}}
 
@@ -912,36 +913,36 @@ impl Instance {
                 0x00 => return Err(Error::Trap(UNREACHABLE)),
                 0x01 | 0xbc | 0xbd | 0xbe | 0xbf => {} // nop and reinterprets (no-op on raw bits)
                 0x02 => { // block
-                    let sig = Signature::read(&self.module.types, bytes, &mut pc)?;
-                    let block_end = *self.module.block_ends.get(&pc).unwrap();
+                    let entry = *self.module.side_table.get(&(pc as u32)).unwrap();
+                    pc = entry.body_pc as usize;
                     control.push(ControlFrame {
-                        stack_len: stack.len() - sig.params.len(),
-                        dest_pc: block_end,
-                        arity: sig.result.is_some() as u32,
-                        has_result: sig.result.is_some()
+                        stack_len: stack.len() - (entry.params_len as usize),
+                        dest_pc: entry.end_pc as usize,
+                        arity: entry.has_result as u32,
+                        has_result: entry.has_result
                     });
                 }
                 0x03 => { // loop
                     let loop_op_pc = pc - 1;
-                    let sig = Signature::read(&self.module.types, bytes, &mut pc)?;
+                    let entry = *self.module.side_table.get(&(pc as u32)).unwrap();
+                    pc = entry.body_pc as usize;
                     control.push(ControlFrame {
-                        stack_len: stack.len() - sig.params.len(),
+                        stack_len: stack.len() - (entry.params_len as usize),
                         dest_pc: loop_op_pc,
-                        arity: sig.params.len() as u32,
-                        has_result: sig.result.is_some()
+                        arity: entry.params_len as u32,
+                        has_result: entry.has_result
                     });
                 }
                 0x04 => { // if
-                    let sig = Signature::read(&self.module.types, bytes, &mut pc)?;
+                    let entry = *self.module.side_table.get(&(pc as u32)).unwrap();
                     let cond = pop_val!().as_u32();
-                    let if_jump = self.module.if_jumps.get(&pc).unwrap();
                     control.push(ControlFrame {
-                        stack_len: stack.len() - sig.params.len(),
-                        dest_pc: if_jump.end_offset,
-                        arity: sig.result.is_some() as u32,
-                        has_result: sig.result.is_some()
+                        stack_len: stack.len() - (entry.params_len as usize),
+                        dest_pc: entry.end_pc as usize,
+                        arity: entry.has_result as u32,
+                        has_result: entry.has_result
                     });
-                    if cond == 0 { pc = if_jump.else_offset; }
+                    pc = if cond == 0 { entry.else_pc as usize } else { entry.body_pc as usize };
                 }
                 0x05 => { // else
                     let _ = Instance::branch(&mut pc, stack, control, 0);
@@ -1009,6 +1010,9 @@ impl Instance {
                 }
                 // Call instructions
                 0x10 => { // call
+                    // direct calls are fully type-checked at validation time; no
+                    // structural type check is required here. we only use the
+                    // runtime signature for fast param/result counts to set up frames.
                     let fi: u32 = read_leb128(bytes, &mut pc)?;
                     let f = &self.functions[fi as usize];
                     
@@ -1047,6 +1051,8 @@ impl Instance {
                     }
                 }
                 0x11 => { // call_indirect
+                    // Indirect calls must enforce params at runtime
+                    // Here we must parse the indices
                     let type_idx: u32 = read_leb128(bytes, &mut pc)?;
                     pc += 1; // Skip the zero flag
                     let elem_idx = match stack.pop() {
@@ -1206,7 +1212,7 @@ impl Instance {
                     if gi as usize >= self.globals.len() {
                         return Err(Error::Trap(UNKNOWN_GLOBAL));
                     }
-                    stack.push(self.globals[gi as usize].borrow().value);
+                    stack.push(self.globals[gi as usize].borrow().value.get());
                 }
                 0x24 => { // global.set
                     let gi: u32 = read_leb128(bytes, &mut pc)?;
@@ -1217,7 +1223,7 @@ impl Instance {
                         Some(v) => v,
                         None => return Err(Error::Trap(STACK_UNDERFLOW))
                     };
-                    self.globals[gi as usize].borrow_mut().value = val;
+                    self.globals[gi as usize].borrow().value.set(val);
                 }
                 // Memory instructions - loads
                 0x28 => { load!(load_u32, |v: u32| WasmValue::from_u32(v)); }
