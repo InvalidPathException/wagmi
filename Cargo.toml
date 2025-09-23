@@ -20,6 +20,19 @@ codegen-units = 1
 panic = "abort"
 overflow-checks = false
 
+[profile.bench]
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+[[bench]]
+name = "coremark"
+harness = false
+
 [[bin]]
 name = "wagmi-run"
 path = "src/bin/wagmi_run.rs"
