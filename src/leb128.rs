@@ -2,42 +2,22 @@ use crate::error::Error::*;
 use crate::error::*;
 
 #[inline]
-fn read_leb128_u64(bytes: &[u8], mut pos: usize) -> Result<(u64, usize), Error> {
-    let mut result = 0u64;
-    let mut shift = 0;
-    loop {
-        let byte = *bytes.get(pos).ok_or(Malformed(UNEXPECTED_END))?;
-        pos += 1;
-        result |= ((byte & 0x7f) as u64) << shift;
-        if byte & 0x80 == 0 { return Ok((result, pos)); }
-        shift += 7;
-    }
-}
-
-#[inline]
-fn read_leb128_i64(bytes: &[u8], mut pos: usize) -> Result<(i64, usize), Error> {
-    let mut result = 0i64;
-    let mut shift = 0;
-    let mut byte;
-    loop {
-        byte = *bytes.get(pos).ok_or(Malformed(UNEXPECTED_END))?;
-        pos += 1;
-        if shift < 63 {
-            result |= ((byte & 0x7f) as i64) << shift;
-        }
-        shift = (shift + 7).min(63);
-        if byte & 0x80 == 0 { break; }
-    }
-    if shift < 64 && (byte & 0x40) != 0 {
-        result |= (!0i64).checked_shl(shift).unwrap_or(!0i64);
-    }
-    Ok((result, pos))
-}
-
-#[inline]
 pub fn safe_read_leb128<T>(bytes: &[u8], pc: &mut usize, bits: u8) -> Result<T, Error>
 where T: TryFrom<u64> {
-    let (result, end) = read_leb128_u64(bytes, *pc)?;
+    let mut result: u64 = 0;
+    let mut shift: u32 = 0;
+    let mut end = *pc;
+    let mut byte: u8;
+    unsafe {
+        loop {
+            if end >= bytes.len() { return Err(Malformed(UNEXPECTED_END)); }
+            byte = *bytes.get_unchecked(end);
+            end += 1;
+            result |= ((byte & 0x7f) as u64) << shift;
+            if byte & 0x80 == 0 { break; }
+            shift += 7;
+        }
+    }
     let consumed = end - *pc;
     if consumed > (bits as usize).div_ceil(7) { return Err(Malformed(INT_TOO_LONG)); }
 
@@ -58,7 +38,25 @@ where T: TryFrom<u64> {
 #[inline]
 pub fn safe_read_sleb128<T>(bytes: &[u8], pc: &mut usize, bits: u8) -> Result<T, Error>
 where T: TryFrom<i64> {
-    let (result, end) = read_leb128_i64(bytes, *pc)?;
+    let mut result: i64 = 0;
+    let mut shift: u32 = 0;
+    let mut end = *pc;
+    let mut byte: u8;
+    unsafe {
+        loop {
+            if end >= bytes.len() { return Err(Malformed(UNEXPECTED_END)); }
+            byte = *bytes.get_unchecked(end);
+            end += 1;
+            if shift < 63 {
+                result |= ((byte & 0x7f) as i64) << shift;
+            }
+            shift = (shift + 7).min(63);
+            if byte & 0x80 == 0 { break; }
+        }
+    }
+    if shift < 64 && (byte & 0x40) != 0 {
+        result |= (!0i64).checked_shl(shift).unwrap_or(!0i64);
+    }
     let consumed = end - *pc;
 
     match bits { // Only bits=32, 33, 64 are used
@@ -82,18 +80,44 @@ where T: TryFrom<i64> {
     Ok(T::try_from(result).ok().unwrap())
 }
 
-#[inline]
+#[inline(always)]
 pub fn read_leb128<T>(bytes: &[u8], pc: &mut usize) -> Result<T, Error>
 where T: TryFrom<u64> {
-    let (val, end) = read_leb128_u64(bytes, *pc)?;
-    *pc = end;
-    Ok(T::try_from(val).ok().unwrap())
+    let mut result: u64 = 0;
+    let mut shift: u32 = 0;
+    let mut byte: u8;
+    unsafe {
+        loop {
+            byte = *bytes.get_unchecked(*pc);
+            *pc += 1;
+            result |= ((byte & 0x7f) as u64) << shift;
+            if byte & 0x80 == 0 {
+                return Ok(T::try_from(result).ok().unwrap_unchecked());
+            }
+            shift += 7;
+        }
+    }
 }
 
-#[inline]
+#[inline(always)]
 pub fn read_sleb128<T>(bytes: &[u8], pc: &mut usize) -> Result<T, Error>
 where T: TryFrom<i64> {
-    let (val, end) = read_leb128_i64(bytes, *pc)?;
-    *pc = end;
-    Ok(T::try_from(val).ok().unwrap())
+    let mut result: i64 = 0;
+    let mut shift: u32 = 0;
+    let mut byte: u8;
+    unsafe {
+        loop {
+            byte = *bytes.get_unchecked(*pc);
+            *pc += 1;
+            if shift < 63 {
+                result |= ((byte & 0x7f) as i64) << shift;
+            }
+            shift = (shift + 7).min(63);
+            if byte & 0x80 == 0 { break; }
+        }
+        if shift < 64 && (byte & 0x40) != 0 {
+            result |= (!0i64) << shift;
+        }
+        Ok(T::try_from(result).ok().unwrap_unchecked())
+    }
 }
