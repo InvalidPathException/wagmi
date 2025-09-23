@@ -297,7 +297,7 @@ pub enum ExportValue {
     Function(RuntimeFunction),
     Table(Rc<RefCell<WasmTable>>),
     Memory(Rc<RefCell<WasmMemory>>),
-    Global(Rc<RefCell<WasmGlobal>>),
+    Global(Rc<WasmGlobal>),
 }
 
 pub type Exports = HashMap<String, ExportValue>;
@@ -317,7 +317,7 @@ pub struct Instance {
     pub module: Rc<Module>,
     pub memory: Option<Rc<RefCell<WasmMemory>>>,
     pub table: Option<Rc<RefCell<WasmTable>>>,
-    pub globals: Vec<Rc<RefCell<WasmGlobal>>>,
+    pub globals: Vec<Rc<WasmGlobal>>,
     pub functions: Vec<RuntimeFunction>,
     pub exports: Exports,
 }
@@ -409,9 +409,8 @@ impl Instance {
                     let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
                     match imported {
                         ExportValue::Global(gl) => {
-                            let gb = gl.borrow();
+                            let gb = gl.as_ref();
                             if gb.ty != g.ty || gb.mutable != g.is_mutable { return Err(Error::Link(INCOMPATIBLE_IMPORT)); }
-                            drop(gb);
                             inst.globals.push(gl.clone());
                         }
                         _ => return Err(Error::Link(INCOMPATIBLE_IMPORT)),
@@ -420,7 +419,7 @@ impl Instance {
                     // evaluate constant initializer
                     let mut cpc = g.initializer_offset;
                     let val = Instance::eval_const(&module, &mut cpc, &inst.globals)?;
-                    inst.globals.push(Rc::new(RefCell::new(WasmGlobal { ty: g.ty, mutable: g.is_mutable, value: Cell::new(val) })));
+                    inst.globals.push(Rc::new(WasmGlobal { ty: g.ty, mutable: g.is_mutable, value: Cell::new(val) }));
                 }
             }
 
@@ -558,7 +557,7 @@ impl Instance {
     fn eval_const(
         module: &Module,
         pc: &mut usize,
-        globals: &[Rc<RefCell<WasmGlobal>>]
+        globals: &[Rc<WasmGlobal>]
     ) -> Result<WasmValue, Error> {
         let bytes = &module.bytes;
         let mut stack: Vec<WasmValue> = Vec::new();
@@ -569,7 +568,7 @@ impl Instance {
                 0x42 => { let v: i64 = read_sleb128(bytes, pc)?; stack.push(WasmValue::from_i64(v)); }
                 0x43 => { let bits = u32::from_le_bytes(bytes[*pc..*pc+4].try_into().unwrap()); *pc += 4; stack.push(WasmValue::from_f32_bits(bits)); }
                 0x44 => { let bits = u64::from_le_bytes(bytes[*pc..*pc+8].try_into().unwrap()); *pc += 8; stack.push(WasmValue::from_f64_bits(bits)); }
-                0x23 => { let gi: u32 = read_leb128(bytes, pc)?; let g = gi as usize; if g >= globals.len() { return Err(Error::Validation(UNKNOWN_GLOBAL)); } stack.push(globals[g].borrow().value.get()); }
+                0x23 => { let gi: u32 = read_leb128(bytes, pc)?; let g = gi as usize; if g >= globals.len() { return Err(Error::Validation(UNKNOWN_GLOBAL)); } stack.push(globals[g].value.get()); }
                 0x6a => { let b = stack.pop().unwrap().as_u32(); let a = stack.pop().unwrap().as_u32(); stack.push(WasmValue::from_u32(a.wrapping_add(b))); }
                 0x6b => { let b = stack.pop().unwrap().as_u32(); let a = stack.pop().unwrap().as_u32(); stack.push(WasmValue::from_u32(a.wrapping_sub(b))); }
                 0x6c => { let b = stack.pop().unwrap().as_u32(); let a = stack.pop().unwrap().as_u32(); stack.push(WasmValue::from_u32(a.wrapping_mul(b))); }
@@ -599,9 +598,7 @@ impl Instance {
         let locals_start = stack.len() - n_params;
 
         // Allocate space for local variables
-        for _ in 0..locals_count {
-            stack.push(WasmValue::default());
-        }
+        stack.resize(stack.len() + locals_count, WasmValue::default());
 
         // Push return target
         control.push(ControlFrame {
@@ -625,6 +622,7 @@ impl Instance {
     }
 
 
+    #[inline(always)]
     fn call_function_idx(
         &self,
         idx: usize,
@@ -674,7 +672,8 @@ impl Instance {
         ctrl_bases: &mut Vec<usize>
     ) -> Result<(), Error> {
         let bytes = &self.module.bytes;
-        let mem_opt = self.memory.as_ref();
+        let mem = self.memory.as_ref();
+        let tab = self.table.as_ref();
 
         macro_rules! next_op { () => {{ let byte = bytes[pc]; pc += 1; byte }} }
         macro_rules! pop_val { () => {{
@@ -881,7 +880,7 @@ impl Instance {
             let _align: u32 = read_leb128(bytes, &mut pc)?;
             let offset: u32 = read_leb128(bytes, &mut pc)?;
             let addr = pop_val!().as_u32();
-            let mem = mem_opt.ok_or_else(|| Error::Validation(UNKNOWN_MEMORY))?;
+            let mem = mem.ok_or_else(|| Error::Validation(UNKNOWN_MEMORY))?;
             let v = mem.borrow().$method(addr, offset).map_err(Error::Trap)?;
             let val = ($push)(v);
             stack.push(val);
@@ -892,7 +891,7 @@ impl Instance {
             let raw = pop_val!();
             let addr = pop_val!().as_u32();
             let val = ($from)(raw);
-            let mem = mem_opt.ok_or_else(|| Error::Validation(UNKNOWN_MEMORY))?;
+            let mem = mem.ok_or_else(|| Error::Validation(UNKNOWN_MEMORY))?;
             mem.borrow_mut().$method(addr, offset, val).map_err(Error::Trap)?;
         }}}
 
@@ -1047,8 +1046,8 @@ impl Instance {
                         Some(v) => v.as_u32(),
                         None => return Err(Error::Trap(STACK_UNDERFLOW))
                     };
-                    let table_rc = match self.table.as_ref() {
-                        Some(t) => t.clone(),
+                    let table_rc = match tab {
+                        Some(t) => t,
                         None => return Err(Error::Trap(UNDEF_ELEM))
                     };
                     let func_ref = {
@@ -1199,7 +1198,7 @@ impl Instance {
                     if gi as usize >= self.globals.len() {
                         return Err(Error::Trap(UNKNOWN_GLOBAL));
                     }
-                    stack.push(self.globals[gi as usize].borrow().value.get());
+                    stack.push(self.globals[gi as usize].value.get());
                 }
                 0x24 => { // global.set
                     let gi: u32 = read_leb128(bytes, &mut pc)?;
@@ -1210,7 +1209,7 @@ impl Instance {
                         Some(v) => v,
                         None => return Err(Error::Trap(STACK_UNDERFLOW))
                     };
-                    self.globals[gi as usize].borrow().value.set(val);
+                    self.globals[gi as usize].value.set(val);
                 }
                 // Memory instructions - loads
                 0x28 => { load!(load_u32, |v: u32| WasmValue::from_u32(v)); }
@@ -1240,7 +1239,8 @@ impl Instance {
                 // Memory instructions - size/grow
                 0x3f => { // memory.size
                     pc += 1; // Skip zero flag
-                    let mem = self.memory.as_ref().ok_or(Error::Validation(UNKNOWN_MEMORY))?;
+                    let mem = mem
+        .ok_or(Error::Validation(UNKNOWN_MEMORY))?;
                     stack.push(WasmValue::from_u32(mem.borrow().size()));
                 }
                 0x40 => { // memory.grow
@@ -1249,7 +1249,8 @@ impl Instance {
                         Some(v) => v.as_u32(),
                         None => return Err(Error::Trap(STACK_UNDERFLOW))
                     };
-                    let mem = self.memory.as_ref().ok_or(Error::Validation(UNKNOWN_MEMORY))?;
+                    let mem = mem
+        .ok_or(Error::Validation(UNKNOWN_MEMORY))?;
                     let old = mem.borrow_mut().grow(delta);
                     stack.push(WasmValue::from_u32(old));
                 }

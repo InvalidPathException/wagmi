@@ -159,7 +159,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  {} : memory [pages: {}, max: {}]", name, m.size(), m.max());
                 }
                 ExportValue::Global(global) => {
-                    let g = global.borrow();
+                    let g = global.as_ref();
                     let mutability = if g.mutable { "mut " } else { "" };
                     println!("  {} : global {}{}", name, mutability, format_type(&g.ty));
                 }

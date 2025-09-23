@@ -104,18 +104,18 @@ fn spectest_exports() -> HashMap<String, ExportValue> {
     
     let mut exports = HashMap::new();
 
-    exports.insert("global_i32".into(), ExportValue::Global(Rc::new(RefCell::new(
+    exports.insert("global_i32".into(), ExportValue::Global(Rc::new(
         WasmGlobal { ty: ValType::I32, mutable: false, value: Cell::new(WasmValue::from_u32(666)) }
-    ))));
-    exports.insert("global_i64".into(), ExportValue::Global(Rc::new(RefCell::new(
+    )));
+    exports.insert("global_i64".into(), ExportValue::Global(Rc::new(
         WasmGlobal { ty: ValType::I64, mutable: false, value: Cell::new(WasmValue::from_u64(666)) }
-    ))));
-    exports.insert("global_f32".into(), ExportValue::Global(Rc::new(RefCell::new(
+    )));
+    exports.insert("global_f32".into(), ExportValue::Global(Rc::new(
         WasmGlobal { ty: ValType::F32, mutable: false, value: Cell::new(WasmValue::from_f32(666.6)) }
-    ))));
-    exports.insert("global_f64".into(), ExportValue::Global(Rc::new(RefCell::new(
+    )));
+    exports.insert("global_f64".into(), ExportValue::Global(Rc::new(
         WasmGlobal { ty: ValType::F64, mutable: false, value: Cell::new(WasmValue::from_f64(666.6)) }
-    ))));
+    )));
 
     exports.insert("table".into(), ExportValue::Table(Rc::new(RefCell::new(
         WasmTable::new(10, 20)
@@ -155,7 +155,7 @@ fn exec_action(instances: &HashMap<String, Rc<Instance>>, action: &Act) -> Resul
     
     match action {
         Act::Get { .. } => match export {
-            ExportValue::Global(g) => Ok(vec![g.borrow().value.get()]),
+            ExportValue::Global(g) => Ok(vec![g.value.get()]),
             _ => Err(Error::Trap("not a global"))
         },
         Act::Invoke { .. } => match export {
