@@ -76,4 +76,12 @@ impl WasmMemory {
     pub fn store_f64(&mut self, ptr: u32, offset: u32, v: f64) -> Result<(), &'static str> {
         self.store_u64(ptr, offset, v.to_bits())
     }
+    #[inline]
+    pub fn write_bytes(&mut self, offset: u32, bytes: &[u8]) -> Result<(), &'static str> {
+        let start = offset as usize;
+        let end = start.checked_add(bytes.len()).ok_or(OOB_MEMORY_ACCESS)?;
+        if end > self.data.len() { return Err(OOB_MEMORY_ACCESS); }
+        self.data[start..end].copy_from_slice(bytes);
+        Ok(())
+    }
 }

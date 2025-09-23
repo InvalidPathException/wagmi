@@ -85,15 +85,13 @@ fn externalized_exports_for(inst: &Rc<Instance>) -> HashMap<String, ExportValue>
                 RuntimeFunction::Host { .. } => {
                     out.insert(name.clone(), ExportValue::Function(src));
                 }
-                RuntimeFunction::Wasm { runtime_sig: ty, .. } => {
+                RuntimeFunction::OwnedWasm { runtime_sig: ty, .. } | RuntimeFunction::ImportedWasm { runtime_sig: ty, .. } => {
                     // For wasm-backed exports, expose an owner handle that
                     // delegates execution into the owning instance
-                    out.insert(name.clone(), ExportValue::Function(RuntimeFunction::Wasm {
+                    out.insert(name.clone(), ExportValue::Function(RuntimeFunction::ImportedWasm {
                         runtime_sig: ty,
-                        pc_start: 0,  // Not used for cross-instance calls
-                        locals_count: 0,
-                        owner: Some(weak.clone()),
-                        function_index: Some(fi),
+                        owner: weak.clone(),
+                        function_index: fi,
                     }));
                 }
             }
