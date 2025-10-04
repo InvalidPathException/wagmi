@@ -861,7 +861,6 @@ impl Instance {
         }}}
 
         loop {
-            if pc >= bytes.len() { return Err(Error::malformed(UNEXPECTED_END)); }
             match next_op!() {
                 0x00 => return Err(Error::trap(UNREACHABLE)),
                 0x01 | 0xbc | 0xbd | 0xbe | 0xbf => {} // nop and reinterprets (no-op on raw bits)
