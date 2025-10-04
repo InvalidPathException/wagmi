@@ -640,7 +640,7 @@ impl Instance {
         let mem = self.memory.as_ref();
         let tab = self.table.as_ref();
 
-        macro_rules! next_op { () => {{ let byte = bytes[pc]; pc += 1; byte }} }
+        macro_rules! next_op { () => {{ let byte = unsafe { *bytes.get_unchecked(pc) }; pc += 1; byte }} }
         macro_rules! pop_val { () => {{
             match stack.pop() { Some(v) => v, None => return Err(Error::trap(STACK_UNDERFLOW)) }
         }} }
@@ -1375,7 +1375,7 @@ impl Instance {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn branch(pc: &mut usize, stack: &mut Vec<WasmValue>, control: &mut Vec<ControlFrame>, depth: u32) -> bool {
         let len = control.len();
         if depth as usize >= len { return true; }

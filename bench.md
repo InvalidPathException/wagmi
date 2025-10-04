@@ -1,4 +1,4 @@
-This file documents the coremark bench results to document performance improvements over time.
+This file documents the coremark bench results to keep track of performance improvements over time.
 - ac6b813: avg ≈ 500 (introduced benchmarking without criterion)
 - 5f4af0c: avg = 529.773949, n = 20 (improved leb128 handling with unsafe)
     - we try to avoid unsafe code in module/validator/instance directly
@@ -7,9 +7,13 @@ This file documents the coremark bench results to document performance improveme
     - current design: two-level indirection (one array covering all possible code indices and directing them to a densely packed side table)
     - we also try to not use nightly features... making error creation cold path is a really elegant solution in this regard
     - repr(C) for the SideTableEntry struct caused mysterious improvements, not sure if it is a fluke
-- current: avg = 855.71814, n = 20 (remove defensive malformed check in main loop)
+- cc02503: avg = 855.71814, n = 20 (remove defensive malformed check in main loop)
     - since the module is already validated at run time, there is no reason for the check to exist, it was a remnant of early development phase that lacked proper handling for some malformed modules
+- current: no significant difference
 
+On nightly, the performance is slightly better (sometimes reaching 900)
+
+Next step: use direct threading to improve branch prediction 
 
 Hardware Overview:
 - Model Name: MacBook Pro
@@ -18,3 +22,12 @@ Hardware Overview:
 - Chip: Apple M4 Pro
 - Total Number of Cores: 12 (8 performance and 4 efficiency)
 - Memory: 24 GB
+
+Performance of other Rust-based interpreters:
+wasmi: ~1700
+tinywasm: ~630
+
+Goal:
+We expect/hope to reach ~1200 after threaded dispatch implementation. It seems like Ben Titzer only reached performance comparable to production-ready, optimizing interpreters through manually crafted assembly code for hot paths. 
+
+Higher performance may not be pursued after the point and instead I might focus on adding more instructions to achieve Wasm 2.0 spec parity (should be easy with AI).
