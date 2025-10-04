@@ -16,7 +16,8 @@ mod error;
 pub use signature::{Signature, ValType};
 
 // Runtime types
-pub use instance::{ExportValue, RuntimeFunction, Imports, Instance, RuntimeSignature, WasmGlobal, WasmTable, WasmValue};
+pub use instance::{ExportValue, RuntimeFunction, Imports, Instance, WasmGlobal, WasmTable, WasmValue};
+pub use signature::RuntimeSignature;
 
 // Main API types
 pub use module::Module;

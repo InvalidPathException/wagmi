@@ -1,4 +1,3 @@
-use crate::error::Error::*;
 use crate::error::*;
 
 #[derive(Clone, Copy)]
@@ -20,14 +19,14 @@ impl<'a> ByteIter<'a> {
     pub fn advance(&mut self, n: usize) { self.idx += n; }
     #[inline]
     pub fn read_u8(&mut self) -> Result<u8, Error> {
-        if self.idx >= self.bytes.len() { return Err(Malformed(UNEXPECTED_END)); }
+        if self.idx >= self.bytes.len() { return Err(Error::malformed(UNEXPECTED_END)); }
         let b = self.bytes[self.idx];
         self.idx += 1;
         Ok(b)
     }
     #[inline]
     pub fn peek_u8(&self) -> Result<u8, Error> {
-        if self.idx >= self.bytes.len() { return Err(Malformed(UNEXPECTED_END)); }
+        if self.idx >= self.bytes.len() { return Err(Error::malformed(UNEXPECTED_END)); }
         Ok(self.bytes[self.idx])
     }
 }

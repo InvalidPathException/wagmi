@@ -1,7 +1,7 @@
 use crate::error::*;
 use crate::leb128::{read_leb128, read_sleb128};
 use crate::module::ExternType;
-use crate::signature::{Signature, ValType};
+use crate::signature::{Signature, ValType, RuntimeSignature};
 use crate::wasm_memory::WasmMemory;
 use crate::Module;
 use paste::paste;
@@ -29,41 +29,6 @@ impl WasmValue {
     #[inline] pub fn as_f32(self) -> f32 { f32::from_bits(self.as_f32_bits()) }
     #[inline] pub fn from_f64(v: f64) -> Self { Self::from_f64_bits(v.to_bits()) }
     #[inline] pub fn as_f64(self) -> f64 { f64::from_bits(self.as_f64_bits()) }
-}
-
-#[derive(Copy, Clone, Eq, PartialEq)]
-pub struct RuntimeSignature(u64);
-
-macro_rules! set_type_bit {
-    ($bits:expr, $t:expr) => {
-        match $t {
-            ValType::I32 => $bits |= RuntimeSignature::HAS_I32,
-            ValType::I64 => $bits |= RuntimeSignature::HAS_I64,
-            ValType::F32 => $bits |= RuntimeSignature::HAS_F32,
-            ValType::F64 => $bits |= RuntimeSignature::HAS_F64,
-            _ => unreachable!()
-        }
-    };
-}
-
-impl RuntimeSignature {
-    const HAS_RESULT: u64 = 1 << 32;
-    const HAS_I32: u64 = 1 << 33; const HAS_I64: u64 = 1 << 34;
-    const HAS_F32: u64 = 1 << 35; const HAS_F64: u64 = 1 << 36;
-    #[inline] pub fn n_params(&self) -> u32 { self.0 as u32 }
-    #[inline] pub fn has_result(&self) -> bool { (self.0 & Self::HAS_RESULT) != 0 }
-    #[inline] pub fn has_i32(&self) -> bool { (self.0 & Self::HAS_I32) != 0 }
-    #[inline] pub fn has_i64(&self) -> bool { (self.0 & Self::HAS_I64) != 0 }
-    #[inline] pub fn has_f32(&self) -> bool { (self.0 & Self::HAS_F32) != 0 }
-    #[inline] pub fn has_f64(&self) -> bool { (self.0 & Self::HAS_F64) != 0 }
-
-    pub fn from_signature(sig: &Signature) -> Self {
-        let mut bits: u64 = sig.params.len() as u64;
-        if sig.result.is_some() { bits |= Self::HAS_RESULT; }
-        for &param in &sig.params { set_type_bit!(bits, param); }
-        if let Some(res) = sig.result { set_type_bit!(bits, res); }
-        RuntimeSignature(bits)
-    }
 }
 
 #[derive(Debug)]
@@ -346,15 +311,15 @@ impl Instance {
             // Memory
             if let Some(memory) = &module.memory {
                 if let Some(import_ref) = memory.import.clone() {
-                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
+                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::link(UNKNOWN_IMPORT))?;
                     match imported {
                         ExportValue::Memory(mem) => {
                             let m = mem.borrow();
-                            if m.size() < memory.min || m.max() > memory.max { return Err(Error::Link(INCOMPATIBLE_IMPORT)); }
+                            if m.size() < memory.min || m.max() > memory.max { return Err(Error::link(INCOMPATIBLE_IMPORT)); }
                             drop(m);
                             inst.memory = Some(mem.clone());
                         }
-                        _ => return Err(Error::Link(INCOMPATIBLE_IMPORT)),
+                        _ => return Err(Error::link(INCOMPATIBLE_IMPORT)),
                     }
                 } else {
                     inst.memory = Some(Rc::new(RefCell::new(WasmMemory::new(memory.min, memory.max))));
@@ -364,15 +329,15 @@ impl Instance {
             // Tables
             if let Some(table) = &module.table {
                 if let Some(import_ref) = table.import.clone() {
-                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
+                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::link(UNKNOWN_IMPORT))?;
                     match imported {
                         ExportValue::Table(tab) => {
                             let tb = tab.borrow();
-                            if tb.size() < table.min || tb.max() > table.max { return Err(Error::Link(INCOMPATIBLE_IMPORT)); }
+                            if tb.size() < table.min || tb.max() > table.max { return Err(Error::link(INCOMPATIBLE_IMPORT)); }
                             drop(tb);
                             inst.table = Some(tab.clone());
                         }
-                        _ => return Err(Error::Link(INCOMPATIBLE_IMPORT)),
+                        _ => return Err(Error::link(INCOMPATIBLE_IMPORT)),
                     }
                 } else {
                     inst.table = Some(Rc::new(RefCell::new(WasmTable::new(table.min, table.max))));
@@ -383,14 +348,14 @@ impl Instance {
             inst.functions.reserve(module.functions.len());
             for function in &module.functions {
                 if let Some(import_ref) = function.import.clone() {
-                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
+                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::link(UNKNOWN_IMPORT))?;
                     let runtime_sig = RuntimeSignature::from_signature(&function.ty);
                     match imported {
                         ExportValue::Function(f) => {
-                            if f.signature() != runtime_sig { return Err(Error::Link(INCOMPATIBLE_IMPORT)); }
+                            if f.signature() != runtime_sig { return Err(Error::link(INCOMPATIBLE_IMPORT)); }
                             inst.functions.push(f.clone());
                         }
-                        _ => return Err(Error::Link(INCOMPATIBLE_IMPORT)),
+                        _ => return Err(Error::link(INCOMPATIBLE_IMPORT)),
                     }
                 } else {
                     let locals_count = function.locals.len().saturating_sub(function.ty.params.len());
@@ -406,14 +371,14 @@ impl Instance {
             inst.globals.reserve(module.globals.len());
             for g in &module.globals {
                 if let Some(import_ref) = g.import.clone() {
-                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::Link(UNKNOWN_IMPORT))?;
+                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::link(UNKNOWN_IMPORT))?;
                     match imported {
                         ExportValue::Global(gl) => {
                             let gb = gl.as_ref();
-                            if gb.ty != g.ty || gb.mutable != g.is_mutable { return Err(Error::Link(INCOMPATIBLE_IMPORT)); }
+                            if gb.ty != g.ty || gb.mutable != g.is_mutable { return Err(Error::link(INCOMPATIBLE_IMPORT)); }
                             inst.globals.push(gl.clone());
                         }
-                        _ => return Err(Error::Link(INCOMPATIBLE_IMPORT)),
+                        _ => return Err(Error::link(INCOMPATIBLE_IMPORT)),
                     }
                 } else {
                     // evaluate constant initializer
@@ -425,21 +390,21 @@ impl Instance {
 
             let mut collected_elements: Option<Vec<(u32, Vec<u32>)>> = None;
             if module.element_count > 0 {
-                if inst.table.is_none() { return Err(Error::Link(UNKNOWN_TABLE)); }
+                if inst.table.is_none() { return Err(Error::link(UNKNOWN_TABLE)); }
                 let bytes = &module.bytes;
                 let mut it = module.element_start;
                 let n_segments: u32 = module.element_count;
                 let mut collected: Vec<(u32, Vec<u32>)> = Vec::with_capacity(n_segments as usize);
                 for _ in 0..n_segments {
                     let flags: u32 = read_leb128(bytes, &mut it)?;
-                    if flags != 0 { return Err(Error::Malformed(INVALID_VALUE_TYPE)); }
+                    if flags != 0 { return Err(Error::malformed(INVALID_VALUE_TYPE)); }
                     let offset = Instance::eval_const(&module, &mut it, &inst.globals)?.as_u32();
                     let n: u32 = read_leb128(bytes, &mut it)?;
                     {
-                        let table_rc = inst.table.as_ref().ok_or(Error::Link(UNKNOWN_TABLE))?;
+                        let table_rc = inst.table.as_ref().ok_or(Error::link(UNKNOWN_TABLE))?;
                         let table_borrow = table_rc.borrow();
                         if (offset as u64) + (n as u64) > table_borrow.size() as u64 {
-                            return Err(Error::Link(ELEM_SEG_DNF));
+                            return Err(Error::link(ELEM_SEG_DNF));
                         }
                     }
                     let mut indices: Vec<u32> = Vec::with_capacity(n as usize);
@@ -463,7 +428,7 @@ impl Instance {
                     let m = mem.borrow();
                     let end = (offset as usize).saturating_add(bytes_vec.len());
                     if end > (m.size() as usize) * (WasmMemory::PAGE_SIZE as usize) {
-                        return Err(Error::Link(DATA_SEG_DNF));
+                        return Err(Error::link(DATA_SEG_DNF));
                     }
                     drop(m);
                     pending.push((offset, bytes_vec));
@@ -475,7 +440,7 @@ impl Instance {
 
             // Apply element segments now that data segments have been validated
             if let Some(collected) = collected_elements {
-                let table_rc = inst.table.as_ref().ok_or(Error::Link(UNKNOWN_TABLE))?.clone();
+                let table_rc = inst.table.as_ref().ok_or(Error::link(UNKNOWN_TABLE))?.clone();
                 for (offset, indices) in collected.iter() {
                     for (j, idx) in indices.iter().enumerate() {
                         let func_idx = *idx as usize;
@@ -489,7 +454,7 @@ impl Instance {
                         let func_ref = FuncRef::new(owner_id, owner_func_idx);
                         let func_ref_value = WasmValue::from_u64(func_ref.as_raw());
                         if table_rc.borrow_mut().set(*offset + (j as u32), func_ref_value).is_err() {
-                            return Err(Error::Link(ELEM_SEG_DNF));
+                            return Err(Error::link(ELEM_SEG_DNF));
                         }
                     }
                 }
@@ -500,7 +465,7 @@ impl Instance {
                 if !pending.is_empty() {
                     let mut m = mem.borrow_mut();
                     for (offset, bytes_vec) in pending.into_iter() {
-                        m.write_bytes(offset, &bytes_vec).map_err(Error::Trap)?;
+                        m.write_bytes(offset, &bytes_vec).map_err(Error::trap)?;
                     }
                 }
             }
@@ -529,7 +494,7 @@ impl Instance {
         if module.start != u32::MAX {
             let fi = module.start as usize;
             let function = &inst_rc.functions[fi];
-            if function.signature().n_params() != 0 || function.signature().has_result() { return Err(Error::Validation(START_FUNC)); }
+            if function.signature().n_params() != 0 || function.signature().has_result() { return Err(Error::validation(START_FUNC)); }
             let mut stack = Vec::with_capacity(64);
             let mut return_pc = 0usize;
             let mut control: Vec<ControlFrame> = Vec::new();
@@ -541,7 +506,7 @@ impl Instance {
                     // If there are live func_ref references to this instance,
                     // keep it alive as a zombie until all references are dropped
                     InstanceManager::with(|mgr| mgr.add_zombie(inst_rc));
-                    return Err(Error::Uninstantiable(msg));
+                    return Err(Error::uninstantiable(msg));
                 }
                 Err(e) => { return Err(e); }
             }
@@ -568,7 +533,7 @@ impl Instance {
                 0x42 => { let v: i64 = read_sleb128(bytes, pc)?; stack.push(WasmValue::from_i64(v)); }
                 0x43 => { let bits = u32::from_le_bytes(bytes[*pc..*pc+4].try_into().unwrap()); *pc += 4; stack.push(WasmValue::from_f32_bits(bits)); }
                 0x44 => { let bits = u64::from_le_bytes(bytes[*pc..*pc+8].try_into().unwrap()); *pc += 8; stack.push(WasmValue::from_f64_bits(bits)); }
-                0x23 => { let gi: u32 = read_leb128(bytes, pc)?; let g = gi as usize; if g >= globals.len() { return Err(Error::Validation(UNKNOWN_GLOBAL)); } stack.push(globals[g].value.get()); }
+                0x23 => { let gi: u32 = read_leb128(bytes, pc)?; let g = gi as usize; if g >= globals.len() { return Err(Error::validation(UNKNOWN_GLOBAL)); } stack.push(globals[g].value.get()); }
                 0x6a => { let b = stack.pop().unwrap().as_u32(); let a = stack.pop().unwrap().as_u32(); stack.push(WasmValue::from_u32(a.wrapping_add(b))); }
                 0x6b => { let b = stack.pop().unwrap().as_u32(); let a = stack.pop().unwrap().as_u32(); stack.push(WasmValue::from_u32(a.wrapping_sub(b))); }
                 0x6c => { let b = stack.pop().unwrap().as_u32(); let a = stack.pop().unwrap().as_u32(); stack.push(WasmValue::from_u32(a.wrapping_mul(b))); }
@@ -576,7 +541,7 @@ impl Instance {
                 0x7d => { let b = stack.pop().unwrap().as_u64(); let a = stack.pop().unwrap().as_u64(); stack.push(WasmValue::from_u64(a.wrapping_sub(b))); }
                 0x7e => { let b = stack.pop().unwrap().as_u64(); let a = stack.pop().unwrap().as_u64(); stack.push(WasmValue::from_u64(a.wrapping_mul(b))); }
                 0x0b => break,
-                _ => return Err(Error::Validation(CONST_EXP_REQUIRED)),
+                _ => return Err(Error::validation(CONST_EXP_REQUIRED)),
             }
         }
         Ok(stack.pop().unwrap())
@@ -610,7 +575,7 @@ impl Instance {
 
         const MAX_CONTROL_DEPTH: usize = 1000;
         if control.len() > MAX_CONTROL_DEPTH {
-            return Err(Error::Trap(STACK_EXHAUSTED));
+            return Err(Error::trap(STACK_EXHAUSTED));
         }
 
         // Track function frame bases
@@ -634,7 +599,7 @@ impl Instance {
     ) -> Result<(), Error> {
         const MAX_CALL_DEPTH: usize = 1000;
         if func_bases.len() >= MAX_CALL_DEPTH {
-            return Err(Error::Trap(STACK_EXHAUSTED));
+            return Err(Error::trap(STACK_EXHAUSTED));
         }
         let fi = &self.functions[idx];
         match fi {
@@ -646,7 +611,7 @@ impl Instance {
                 if let Some(owner_rc) = owner.upgrade() {
                     owner_rc.call_function_idx(*function_index, return_pc, stack, control, func_bases, ctrl_bases)?;
                 } else {
-                    return Err(Error::Trap(FUNC_NO_IMPL));
+                    return Err(Error::trap(FUNC_NO_IMPL));
                 }
             }
             RuntimeFunction::Host { callback, runtime_sig } => {
@@ -677,7 +642,7 @@ impl Instance {
 
         macro_rules! next_op { () => {{ let byte = bytes[pc]; pc += 1; byte }} }
         macro_rules! pop_val { () => {{
-            match stack.pop() { Some(v) => v, None => return Err(Error::Trap(STACK_UNDERFLOW)) }
+            match stack.pop() { Some(v) => v, None => return Err(Error::trap(STACK_UNDERFLOW)) }
         }} }
         macro_rules! binary {
             ($type:ident, $op:tt) => {{
@@ -819,13 +784,13 @@ impl Instance {
                     let x = stack.pop().unwrap().[<as_ $src_type>]();
                     if !x.is_finite() {
                         if x.is_nan() {
-                            return Err(Error::Trap(INVALID_CONV_TO_INT));
+            return Err(Error::trap(INVALID_CONV_TO_INT));
                         } else {
-                            return Err(Error::Trap(INTEGER_OVERFLOW));
+                            return Err(Error::trap(INTEGER_OVERFLOW));
                         }
                     }
                     if x <= $min || x >= $max {
-                        return Err(Error::Trap(INTEGER_OVERFLOW));
+                        return Err(Error::trap(INTEGER_OVERFLOW));
                     }
                     stack.push(WasmValue::[<from_ $dst_type>](x as $dst_type));
                 }
@@ -836,8 +801,8 @@ impl Instance {
                 paste! {
                     let b = pop_val!().[<as_ $int_type>]();
                     let a = pop_val!().[<as_ $int_type>]();
-                    if b == 0 { return Err(Error::Trap(DIVIDE_BY_ZERO)); }
-                    if a == $int_type::MIN && b == -1 { return Err(Error::Trap(INTEGER_OVERFLOW)); }
+                    if b == 0 { return Err(Error::trap(DIVIDE_BY_ZERO)); }
+                    if a == $int_type::MIN && b == -1 { return Err(Error::trap(INTEGER_OVERFLOW)); }
                     stack.push(WasmValue::[<from_ $int_type>](a / b));
                 }
             }};
@@ -847,7 +812,7 @@ impl Instance {
                 paste! {
                     let b = pop_val!().[<as_ $uint_type>]();
                     let a = pop_val!().[<as_ $uint_type>]();
-                    if b == 0 { return Err(Error::Trap(DIVIDE_BY_ZERO)); }
+                    if b == 0 { return Err(Error::trap(DIVIDE_BY_ZERO)); }
                     stack.push(WasmValue::[<from_ $uint_type>](a / b));
                 }
             }};
@@ -857,7 +822,7 @@ impl Instance {
                 paste! {
                     let b = pop_val!().[<as_ $int_type>]();
                     let a = pop_val!().[<as_ $int_type>]();
-                    if b == 0 { return Err(Error::Trap(DIVIDE_BY_ZERO)); }
+                    if b == 0 { return Err(Error::trap(DIVIDE_BY_ZERO)); }
                     if a == $int_type::MIN && b == -1 {
                         stack.push(WasmValue::[<from_ $int_type>](0));
                     } else {
@@ -871,7 +836,7 @@ impl Instance {
                 paste! {
                     let b = pop_val!().[<as_ $uint_type>]();
                     let a = pop_val!().[<as_ $uint_type>]();
-                    if b == 0 { return Err(Error::Trap(DIVIDE_BY_ZERO)); }
+                    if b == 0 { return Err(Error::trap(DIVIDE_BY_ZERO)); }
                     stack.push(WasmValue::[<from_ $uint_type>](a % b));
                 }
             }};
@@ -880,8 +845,8 @@ impl Instance {
             let _align: u32 = read_leb128(bytes, &mut pc)?;
             let offset: u32 = read_leb128(bytes, &mut pc)?;
             let addr = pop_val!().as_u32();
-            let mem = mem.ok_or_else(|| Error::Validation(UNKNOWN_MEMORY))?;
-            let v = mem.borrow().$method(addr, offset).map_err(Error::Trap)?;
+            let mem = mem.ok_or_else(|| Error::validation(UNKNOWN_MEMORY))?;
+            let v = mem.borrow().$method(addr, offset).map_err(Error::trap)?;
             let val = ($push)(v);
             stack.push(val);
         }}}
@@ -891,46 +856,49 @@ impl Instance {
             let raw = pop_val!();
             let addr = pop_val!().as_u32();
             let val = ($from)(raw);
-            let mem = mem.ok_or_else(|| Error::Validation(UNKNOWN_MEMORY))?;
-            mem.borrow_mut().$method(addr, offset, val).map_err(Error::Trap)?;
+            let mem = mem.ok_or_else(|| Error::validation(UNKNOWN_MEMORY))?;
+            mem.borrow_mut().$method(addr, offset, val).map_err(Error::trap)?;
         }}}
 
         loop {
-            if pc >= bytes.len() { return Err(Error::Malformed(UNEXPECTED_END)); }
+            if pc >= bytes.len() { return Err(Error::malformed(UNEXPECTED_END)); }
             match next_op!() {
-                0x00 => return Err(Error::Trap(UNREACHABLE)),
+                0x00 => return Err(Error::trap(UNREACHABLE)),
                 0x01 | 0xbc | 0xbd | 0xbe | 0xbf => {} // nop and reinterprets (no-op on raw bits)
                 0x02 => { // block
-                    let entry = *self.module.side_table.get(&(pc as u32)).unwrap();
-                    pc = entry.body_pc as usize;
+                    let (body_pc, end_pc, _else_pc, params_len, has_result) =
+                        self.module.side_table.lookup(pc).unwrap();
+                    pc = body_pc;
                     control.push(ControlFrame {
-                        stack_len: stack.len() - (entry.params_len as usize),
-                        dest_pc: entry.end_pc as usize,
-                        arity: entry.has_result as u32,
-                        has_result: entry.has_result
+                        stack_len: stack.len() - (params_len as usize),
+                        dest_pc: end_pc,
+                        arity: has_result as u32,
+                        has_result,
                     });
                 }
                 0x03 => { // loop
                     let loop_op_pc = pc - 1;
-                    let entry = *self.module.side_table.get(&(pc as u32)).unwrap();
-                    pc = entry.body_pc as usize;
+                    let (body_pc, _end_pc, _else_pc, params_len, has_result) =
+                        self.module.side_table.lookup(pc).unwrap();
+                    pc = body_pc;
                     control.push(ControlFrame {
-                        stack_len: stack.len() - (entry.params_len as usize),
+                        stack_len: stack.len() - (params_len as usize),
                         dest_pc: loop_op_pc,
-                        arity: entry.params_len as u32,
-                        has_result: entry.has_result
+                        arity: params_len as u32,
+                        has_result,
                     });
                 }
                 0x04 => { // if
-                    let entry = *self.module.side_table.get(&(pc as u32)).unwrap();
+                    let (body_pc, end_pc, else_pc, params_len, has_result) =
+                        self.module.side_table.lookup(pc).unwrap();
                     let cond = pop_val!().as_u32();
                     control.push(ControlFrame {
-                        stack_len: stack.len() - (entry.params_len as usize),
-                        dest_pc: entry.end_pc as usize,
-                        arity: entry.has_result as u32,
-                        has_result: entry.has_result
+                        stack_len: stack.len() - (params_len as usize),
+                        dest_pc: end_pc,
+                        arity: has_result as u32,
+                        has_result,
                     });
-                    pc = if cond == 0 { entry.else_pc as usize } else { entry.body_pc as usize };
+                    pc = if cond == 0 { else_pc } else { body_pc };
                 }
                 0x05 => { // else
                     let _ = Instance::branch(&mut pc, stack, control, 0);
@@ -1022,7 +990,7 @@ impl Instance {
                                 owner_rc.call_function_idx(*function_index, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut func_bases_nested, &mut ctrl_bases_nested)?;
                                 for v in tmp_stack { stack.push(v); }
                             } else {
-                                return Err(Error::Trap(FUNC_NO_IMPL));
+                                return Err(Error::trap(FUNC_NO_IMPL));
                             }
                         }
                         RuntimeFunction::Host { callback, runtime_sig } => {
@@ -1044,28 +1012,28 @@ impl Instance {
                     pc += 1; // Skip the zero flag
                     let elem_idx = match stack.pop() {
                         Some(v) => v.as_u32(),
-                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                        None => return Err(Error::trap(STACK_UNDERFLOW))
                     };
                     let table_rc = match tab {
                         Some(t) => t,
-                        None => return Err(Error::Trap(UNDEF_ELEM))
+                        None => return Err(Error::trap(UNDEF_ELEM))
                     };
                     let func_ref = {
                         let table_borrow = table_rc.borrow();
                         if elem_idx >= table_borrow.size() {
-                            return Err(Error::Trap(UNDEF_ELEM));
+                            return Err(Error::trap(UNDEF_ELEM));
                         }
-                        table_borrow.get(elem_idx).map_err(Error::Trap)?
+                        table_borrow.get(elem_idx).map_err(Error::trap)?
                     };
                     let handle = func_ref.as_u64();
                     if handle == 0 {
-                        return Err(Error::Trap(UNINITIALIZED_ELEM));
+                        return Err(Error::trap(UNINITIALIZED_ELEM));
                     }
 
                     let owner_id: u32 = (handle >> 32) as u32;
                     let low: u32 = (handle & 0xFFFF_FFFF) as u32;
                     if low == 0 {
-                        return Err(Error::Trap(FUNC_NO_IMPL));
+                        return Err(Error::trap(FUNC_NO_IMPL));
                     }
                     let func_idx = (low - 1) as usize;
                     let expected = RuntimeSignature::from_signature(&self.module.types[type_idx as usize]);
@@ -1098,18 +1066,18 @@ impl Instance {
                             }
                         });
                         if !sig_ok {
-                            return Err(Error::Trap(INDIRECT_CALL_MISMATCH));
+                            return Err(Error::trap(INDIRECT_CALL_MISMATCH));
                         }
                         if dispatched {
                             continue;
                         } else {
-                            return Err(Error::Trap(FUNC_NO_IMPL));
+                            return Err(Error::trap(FUNC_NO_IMPL));
                         }
                     }
 
                     let callee = self.functions[func_idx].clone();
                     if callee.signature() != expected {
-                        return Err(Error::Trap(INDIRECT_CALL_MISMATCH));
+                        return Err(Error::trap(INDIRECT_CALL_MISMATCH));
                     }
 
                     match callee {
@@ -1127,7 +1095,7 @@ impl Instance {
                                 owner_rc.call_function_idx(function_index, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut func_bases_nested, &mut ctrl_bases_nested)?;
                                 for v in tmp_stack { stack.push(v); }
                             } else {
-                                return Err(Error::Trap(FUNC_NO_IMPL));
+                                return Err(Error::trap(FUNC_NO_IMPL));
                             }
                         }
                         RuntimeFunction::OwnedWasm { runtime_sig, pc_start, locals_count } => {
@@ -1148,21 +1116,21 @@ impl Instance {
                 // Parametric instructions
                 0x1a => { // drop
                     if stack.pop().is_none() {
-                        return Err(Error::Trap(STACK_UNDERFLOW));
+                        return Err(Error::trap(STACK_UNDERFLOW));
                     }
                 }
                 0x1b => { // select
                     let cond = match stack.pop() {
                         Some(v) => v.as_u32(),
-                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                        None => return Err(Error::trap(STACK_UNDERFLOW))
                     };
                     let v2 = match stack.pop() {
                         Some(v) => v,
-                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                        None => return Err(Error::trap(STACK_UNDERFLOW))
                     };
                     let v1 = match stack.pop() {
                         Some(v) => v,
-                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                        None => return Err(Error::trap(STACK_UNDERFLOW))
                     };
                     stack.push(if cond != 0 { v1 } else { v2 });
                 }
@@ -1177,7 +1145,7 @@ impl Instance {
                     let local: u32 = read_leb128(bytes, &mut pc)?;
                     let val = match stack.pop() {
                         Some(v) => v,
-                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                        None => return Err(Error::trap(STACK_UNDERFLOW))
                     };
                     let base = *func_bases.last().unwrap();
                     let i = base + local as usize;
@@ -1187,7 +1155,7 @@ impl Instance {
                     let local: u32 = read_leb128(bytes, &mut pc)?;
                     let val = match stack.last() {
                         Some(v) => *v,
-                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                        None => return Err(Error::trap(STACK_UNDERFLOW))
                     };
                     let base = *func_bases.last().unwrap();
                     let i = base + local as usize;
@@ -1196,18 +1164,18 @@ impl Instance {
                 0x23 => { // global.get
                     let gi: u32 = read_leb128(bytes, &mut pc)?;
                     if gi as usize >= self.globals.len() {
-                        return Err(Error::Trap(UNKNOWN_GLOBAL));
+                        return Err(Error::trap(UNKNOWN_GLOBAL));
                     }
                     stack.push(self.globals[gi as usize].value.get());
                 }
                 0x24 => { // global.set
                     let gi: u32 = read_leb128(bytes, &mut pc)?;
                     if gi as usize >= self.globals.len() {
-                        return Err(Error::Trap(UNKNOWN_GLOBAL));
+                        return Err(Error::trap(UNKNOWN_GLOBAL));
                     }
                     let val = match stack.pop() {
                         Some(v) => v,
-                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                        None => return Err(Error::trap(STACK_UNDERFLOW))
                     };
                     self.globals[gi as usize].value.set(val);
                 }
@@ -1240,17 +1208,17 @@ impl Instance {
                 0x3f => { // memory.size
                     pc += 1; // Skip zero flag
                     let mem = mem
-        .ok_or(Error::Validation(UNKNOWN_MEMORY))?;
+        .ok_or(Error::validation(UNKNOWN_MEMORY))?;
                     stack.push(WasmValue::from_u32(mem.borrow().size()));
                 }
                 0x40 => { // memory.grow
                     pc += 1; // Skip zero flag
                     let delta = match stack.pop() {
                         Some(v) => v.as_u32(),
-                        None => return Err(Error::Trap(STACK_UNDERFLOW))
+                        None => return Err(Error::trap(STACK_UNDERFLOW))
                     };
                     let mem = mem
-        .ok_or(Error::Validation(UNKNOWN_MEMORY))?;
+        .ok_or(Error::validation(UNKNOWN_MEMORY))?;
                     let old = mem.borrow_mut().grow(delta);
                     stack.push(WasmValue::from_u32(old));
                 }
@@ -1402,7 +1370,7 @@ impl Instance {
                 0xba => { convert!(u64 -> f64); } // f64.convert_i64_u
                 0xbb => { convert!(f32 -> f64); } // f64.promote_f32
                 _ => {
-                    return Err(Error::Malformed(UNKNOWN_INSTRUCTION));
+                    return Err(Error::malformed(UNKNOWN_INSTRUCTION));
                 }
             }
         }
@@ -1435,7 +1403,7 @@ impl Instance {
 
     pub fn invoke(&self, func: &RuntimeFunction, args: &[WasmValue]) -> Result<Vec<WasmValue>, Error> {
         let n_params = func.param_count();
-        if n_params != args.len() { return Err(Error::Trap(INVALID_NUM_ARG)); }
+        if n_params != args.len() { return Err(Error::trap(INVALID_NUM_ARG)); }
 
         let mut stack: Vec<WasmValue> = Vec::with_capacity(1024);
         for v in args { stack.push(*v); }
@@ -1460,7 +1428,7 @@ impl Instance {
                     owner_rc.call_function_idx(*function_index, &mut return_pc, &mut owned_stack, &mut control, &mut func_bases, &mut ctrl_bases)?;
                     return Ok(owned_stack);
                 } else {
-                    return Err(Error::Trap(FUNC_NO_IMPL));
+                    return Err(Error::trap(FUNC_NO_IMPL));
                 }
             }
             RuntimeFunction::Host { callback, .. } => {

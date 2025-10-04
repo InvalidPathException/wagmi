@@ -1,15 +1,19 @@
 use std::collections::HashMap;
-use nohash_hasher::BuildNoHashHasher;
 use std::rc::Rc;
 
 use crate::byte_iter::*;
-use crate::error::Error::*;
 use crate::error::*;
 use crate::leb128::*;
 use crate::signature::*;
 use crate::validator::{validate_const, Validator};
 
 const MAGIC_HEADER: &[u8; 4] = b"\0asm";
+
+// Side table paging
+const SIDE_PAGE_SIZE: usize = 256; // 256 entries per page (~4 KiB per page)
+const SIDE_PAGE_SHIFT: usize = 8;  // log2(256)
+const SIDE_PAGE_MASK: usize = SIDE_PAGE_SIZE - 1;
+const SIDE_PAGE_UNMAPPED: usize = usize::MAX;
 
 // ---------------- Import/Export related ----------------
 #[derive(Clone, Debug)]
@@ -68,13 +72,130 @@ pub struct Export { pub extern_type: ExternType, pub idx: u32 }
 #[derive(Clone)]
 pub struct DataSegment { pub data_range: std::ops::Range<usize>, pub initializer_offset: usize }
 
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct SideTableEntry {
-    pub params_len: u16,
-    pub has_result: bool,
     pub body_pc: u32,   // start pc of block body (after the sig)
     pub end_pc: u32,    // end pc of the construct
     pub else_pc: u32,   // else start pc or end_pc if no else
+    pub control_sig: RuntimeSignature,
+}
+
+pub struct SideTable {
+    page_offsets: Vec<usize>,
+    entries: Vec<SideTableEntry>,
+    code_base: usize,
+    code_end: usize,
+}
+
+impl Default for SideTable {
+    fn default() -> Self {
+        Self {
+            page_offsets: Vec::new(),
+            entries: Vec::new(),
+            code_base: usize::MAX,
+            code_end: 0,
+        }
+    }
+}
+
+impl SideTable {
+    #[inline]
+    fn ensure_page(&mut self, page_idx: usize) -> usize {
+        if page_idx >= self.page_offsets.len() {
+            self.page_offsets.resize(page_idx + 1, SIDE_PAGE_UNMAPPED);
+        }
+
+        let offset = self.page_offsets[page_idx];
+        if offset == SIDE_PAGE_UNMAPPED {
+            let base = self.entries.len();
+            self.entries.resize(base + SIDE_PAGE_SIZE, SideTableEntry::default());
+            self.page_offsets[page_idx] = base;
+            base
+        } else {
+            offset
+        }
+    }
+
+    #[inline]
+    fn slot_for(&self, abs_pc: usize) -> Option<(usize, usize)> {
+        if self.code_base == usize::MAX || abs_pc < self.code_base || abs_pc >= self.code_end {
+            return None;
+        }
+        let idx = abs_pc - self.code_base;
+        let page = idx >> SIDE_PAGE_SHIFT;
+        let slot = idx & SIDE_PAGE_MASK;
+        Some((page, slot))
+    }
+
+    #[inline]
+    fn entry_mut(&mut self, abs_pc: usize) -> Option<&mut SideTableEntry> {
+        let (page, slot) = self.slot_for(abs_pc)?;
+        let base = self.ensure_page(page);
+        let idx = base + slot;
+        Some(&mut self.entries[idx])
+    }
+
+    #[inline]
+    fn entry_for(&self, abs_pc: usize) -> Option<SideTableEntry> {
+        let (page, slot) = self.slot_for(abs_pc)?;
+        let offset = *self.page_offsets.get(page)?;
+        if offset == SIDE_PAGE_UNMAPPED {
+            return None;
+        }
+        self.entries.get(offset + slot).copied()
+    }
+
+    #[inline]
+    pub fn put_sig(
+        &mut self,
+        sig_pc_abs: usize,
+        body_pc_abs: usize,
+        params_len: u16,
+        has_result: bool,
+    ) {
+        if let Some(entry) = self.entry_mut(sig_pc_abs) {
+            entry.body_pc = body_pc_abs as u32;
+            entry.end_pc = 0;
+            entry.else_pc = 0;
+            entry.control_sig = encode_control_sig(params_len, has_result);
+        }
+    }
+
+    #[inline]
+    pub fn fill_end_else(
+        &mut self,
+        sig_pc_abs: usize,
+        end_pc_abs: usize,
+        else_pc_abs: usize,
+    ) {
+        if let Some(entry) = self.entry_mut(sig_pc_abs) {
+            if entry.control_sig.is_present() {
+                entry.end_pc = end_pc_abs as u32;
+                entry.else_pc = else_pc_abs as u32;
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn lookup(&self, abs_pc: usize) -> Option<(usize, usize, usize, u16, bool)> {
+        let entry = self.entry_for(abs_pc)?;
+        if !entry.control_sig.is_present() {
+            return None;
+        }
+        let params_len = entry.control_sig.n_params() as u16;
+        let has_result = entry.control_sig.has_result();
+        Some((entry.body_pc as usize, entry.end_pc as usize, entry.else_pc as usize, params_len, has_result))
+    }
+
+    pub fn set_code_range(&mut self, base: usize, end: usize) {
+        if self.code_base == usize::MAX || base < self.code_base {
+            self.code_base = base;
+        }
+        if end > self.code_end {
+            self.code_end = end;
+        }
+    }
 }
 
 // ---------------- Module Structure ----------------
@@ -93,7 +214,7 @@ pub struct Module {
     pub functions: Vec<Function>,
     pub n_data: u32,
     pub data_segments: Vec<DataSegment>,
-    pub side_table: HashMap<u32, SideTableEntry, BuildNoHashHasher<u32>>,
+    pub side_table: SideTable,
 }
 
 impl Module {
@@ -105,6 +226,7 @@ impl Module {
         let mut m = Module {
             bytes: Rc::new(bytes),
             start: u32::MAX,
+            side_table: SideTable::default(),
             ..Default::default()
         };
         m.initialize()?;
@@ -116,15 +238,15 @@ impl Module {
         let bytes: &[u8] = &self.bytes.clone()[..];
         
         // Check magic number and version
-        if bytes.len() < 4 { return Err(Malformed(UNEXPECTED_END_SHORT)); }
+        if bytes.len() < 4 { return Err(Error::malformed(UNEXPECTED_END_SHORT)); }
         if &bytes[0..4] != MAGIC_HEADER {
-            return Err(Malformed(NO_MAGIC_HEADER));
+            return Err(Error::malformed(NO_MAGIC_HEADER));
         }
         
         let mut it = ByteIter::new(bytes, 4);
-        if bytes.len() < 8 { return Err(Malformed(UNEXPECTED_END_SHORT)); }
+        if bytes.len() < 8 { return Err(Error::malformed(UNEXPECTED_END_SHORT)); }
         if u32::from_le_bytes(bytes[4..8].try_into().unwrap()) != 1 {
-            return Err(Malformed(UNKNOWN_BINARY_VERSION));
+            return Err(Error::malformed(UNKNOWN_BINARY_VERSION));
         }
         it.advance(4);
 
@@ -143,11 +265,11 @@ impl Module {
         // Check that all non-imported functions have code
         for func in &self.functions {
             if func.import.is_none() && func.body.start == 0 && func.body.end == 0 {
-                return Err(Malformed(FUNC_CODE_INCONSISTENT));
+                return Err(Error::malformed(FUNC_CODE_INCONSISTENT));
             }
         }
 
-        if !it.empty() { return Err(Malformed(LENGTH_OUT_OF_BOUNDS)); }
+        if !it.empty() { return Err(Error::malformed(LENGTH_OUT_OF_BOUNDS)); }
         Ok(())
     }
 
@@ -156,10 +278,10 @@ impl Module {
         self.types.reserve_exact(n_types as usize);
 
         for _i in 0..n_types as usize {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
+            if it.empty() { return Err(Error::malformed(UNEXPECTED_END)); }
             let byte = it.read_u8()?;
             if byte != 0x60 {
-                return Err(Malformed(INT_TOO_LONG));
+                return Err(Error::malformed(INT_TOO_LONG));
             }
 
             let n_params: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
@@ -169,19 +291,19 @@ impl Module {
             for _ in 0..n_params {
                 let ty = it.read_u8()?;
                 if !is_val_type(ty) {
-                    return Err(Malformed(INVALID_VALUE_TYPE));
+                    return Err(Error::malformed(INVALID_VALUE_TYPE));
                 }
                 sig.params.push(val_type_from_byte(ty).unwrap());
             }
 
             let n_results: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             if n_results > 1 {
-                return Err(Validation(INVALID_RESULT_ARITY));
+                return Err(Error::validation(INVALID_RESULT_ARITY));
             }
             if n_results == 1 {
                 let ty = it.read_u8()?;
                 if !is_val_type(ty) {
-                    return Err(Malformed(INVALID_RESULT_TYPE));
+                    return Err(Error::malformed(INVALID_RESULT_TYPE));
                 }
                 sig.result = Some(val_type_from_byte(ty).unwrap());
             }
@@ -196,30 +318,30 @@ impl Module {
         let n_imports: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
         for _ in 0..n_imports {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
+            if it.empty() { return Err(Error::malformed(UNEXPECTED_END)); }
 
             // Module name
             let module_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             let module_start = it.idx;
             if module_start + module_len as usize > bytes.len() {
-                return Err(Malformed(UNEXPECTED_END));
+                return Err(Error::malformed(UNEXPECTED_END));
             }
             let module_name = String::from_utf8(bytes[module_start..module_start + module_len as usize].to_vec())
-                .map_err(|_| Malformed(INVALID_UTF8))?;
+                .map_err(|_| Error::malformed(INVALID_UTF8))?;
             it.idx = module_start + module_len as usize;
 
             // Field name
             let field_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             let field_start = it.idx;
             if field_start + field_len as usize > bytes.len() {
-                return Err(Malformed(UNEXPECTED_END));
+                return Err(Error::malformed(UNEXPECTED_END));
             }
             let field_name = String::from_utf8(bytes[field_start..field_start + field_len as usize].to_vec())
-                .map_err(|_| Malformed(INVALID_UTF8))?;
+                .map_err(|_| Error::malformed(INVALID_UTF8))?;
             it.idx = field_start + field_len as usize;
 
             let extern_type = ExternType::from_byte(it.read_u8()?)
-                .ok_or(Malformed(MALFORMED_IMPORT_KIND))?;
+                .ok_or(Error::malformed(MALFORMED_IMPORT_KIND))?;
 
             self.imports.entry(module_name.clone()).or_default().insert(field_name.clone(), extern_type);
             let import = Some(ImportRef {
@@ -231,7 +353,7 @@ impl Module {
                 ExternType::Func => {
                     let type_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
                     if (type_idx as usize) >= self.types.len() {
-                        return Err(Validation(UNKNOWN_TYPE));
+                        return Err(Error::validation(UNKNOWN_TYPE));
                     }
                     self.functions.push(Function {
                         body: 0..0,
@@ -243,19 +365,19 @@ impl Module {
                 }
                 ExternType::Table => {
                     if self.table.is_some() {
-                        return Err(Validation(MULTIPLE_TABLES));
+                        return Err(Error::validation(MULTIPLE_TABLES));
                     }
                     // Only 0x70 in 1.0 MVP
                     let reftype: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
                     if reftype != 0x70 {
-                        return Err(Malformed(MALFORMED_REF_TYPE));
+                        return Err(Error::malformed(MALFORMED_REF_TYPE));
                     }
                     let (min, max) = get_table_limits(bytes, it)?;
                     self.table = Some(Table { min, max, import });
                 }
                 ExternType::Mem => {
                     if self.memory.is_some() {
-                        return Err(Validation(MULTIPLE_MEMORIES));
+                        return Err(Error::validation(MULTIPLE_MEMORIES));
                     }
                     let (min, max) = get_memory_limits(bytes, it)?;
                     self.memory = Some(Memory { min, max, import });
@@ -263,7 +385,7 @@ impl Module {
                 ExternType::Global => {
                     let ty: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
                     if !is_val_type(ty as u8) {
-                        return Err(Malformed(INVALID_GLOBAL_TYPE));
+                        return Err(Error::malformed(INVALID_GLOBAL_TYPE));
                     }
                     let mut_byte = it.read_u8()?;
                     let is_mutable = mutability_from_byte(mut_byte)?;
@@ -284,10 +406,10 @@ impl Module {
         self.functions.reserve(n_functions as usize);
 
         for _ in 0..n_functions {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
+            if it.empty() { return Err(Error::malformed(UNEXPECTED_END)); }
             let type_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             if (type_idx as usize) >= self.types.len() {
-                return Err(Validation(UNKNOWN_TYPE));
+                return Err(Error::validation(UNKNOWN_TYPE));
             }
             self.functions.push(Function {
                 body: 0..0,
@@ -303,14 +425,14 @@ impl Module {
     fn parse_table_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
         let n_tables: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
         if n_tables > 1 || (n_tables == 1 && self.table.is_some()) {
-            return Err(Validation(MULTIPLE_TABLES));
+            return Err(Error::validation(MULTIPLE_TABLES));
         }
 
         if n_tables == 1 {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
+            if it.empty() { return Err(Error::malformed(UNEXPECTED_END)); }
             let elem_type = it.read_u8()?;
             if elem_type != 0x70 {
-                return Err(Validation(INVALID_ELEM_TYPE));
+                return Err(Error::validation(INVALID_ELEM_TYPE));
             }
             let (min, max) = get_table_limits(bytes, it)?;
             self.table = Some(Table { min, max, import: None });
@@ -321,11 +443,11 @@ impl Module {
     fn parse_memory_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
         let n_memories: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
         if n_memories > 1 || (n_memories == 1 && self.memory.is_some()) {
-            return Err(Validation(MULTIPLE_MEMORIES));
+            return Err(Error::validation(MULTIPLE_MEMORIES));
         }
 
         if n_memories == 1 {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
+            if it.empty() { return Err(Error::malformed(UNEXPECTED_END)); }
             let (min, max) = get_memory_limits(bytes, it)?;
             self.memory = Some(Memory { min, max, import: None });
         }
@@ -336,10 +458,10 @@ impl Module {
         let n_globals: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
         for _ in 0..n_globals {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
+            if it.empty() { return Err(Error::malformed(UNEXPECTED_END)); }
             let ty = it.read_u8()?;
             if !is_val_type(ty) {
-                return Err(Malformed(INVALID_GLOBAL_TYPE));
+                return Err(Error::malformed(INVALID_GLOBAL_TYPE));
             }
             let mut_byte = it.read_u8()?;
             let is_mutable = mutability_from_byte(mut_byte)?;
@@ -359,46 +481,46 @@ impl Module {
         let n_exports: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
         for _ in 0..n_exports {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
+            if it.empty() { return Err(Error::malformed(UNEXPECTED_END)); }
 
             let name_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             let name_start = it.idx;
             if name_start + name_len as usize > bytes.len() {
-                return Err(Malformed(UNEXPECTED_END));
+                return Err(Error::malformed(UNEXPECTED_END));
             }
             let name = String::from_utf8(bytes[name_start..name_start + name_len as usize].to_vec()).unwrap();
             it.idx = name_start + name_len as usize;
 
             let byte = it.read_u8()?;
             let extern_type = ExternType::from_byte(byte)
-                .ok_or(Validation(INVALID_EXPORT_DESC))?;
+                .ok_or(Error::validation(INVALID_EXPORT_DESC))?;
 
             let export_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
             if self.exports.contains_key(&name) {
-                return Err(Validation(DUP_EXPORT_NAME));
+                return Err(Error::validation(DUP_EXPORT_NAME));
             }
 
             match extern_type {
                 ExternType::Func => {
                     if (export_idx as usize) >= self.functions.len() {
-                        return Err(Validation(UNKNOWN_FUNC));
+                        return Err(Error::validation(UNKNOWN_FUNC));
                     }
                     self.functions[export_idx as usize].is_declared = true;
                 }
                 ExternType::Table => {
                     if export_idx != 0 {
-                        return Err(Validation(UNKNOWN_TABLE));
+                        return Err(Error::validation(UNKNOWN_TABLE));
                     }
                 }
                 ExternType::Mem => {
                     if export_idx != 0 || self.memory.is_none() {
-                        return Err(Validation(UNKNOWN_MEMORY));
+                        return Err(Error::validation(UNKNOWN_MEMORY));
                     }
                 }
                 ExternType::Global => {
                     if (export_idx as usize) >= self.globals.len() {
-                        return Err(Validation(UNKNOWN_GLOBAL));
+                        return Err(Error::validation(UNKNOWN_GLOBAL));
                     }
                 }
             }
@@ -414,7 +536,7 @@ impl Module {
     fn parse_start_section(&mut self, bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
         let start: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
         if (start as usize) >= self.functions.len() {
-            return Err(Validation(UNKNOWN_FUNC));
+            return Err(Error::validation(UNKNOWN_FUNC));
         }
         self.start = start;
         Ok(())
@@ -426,13 +548,13 @@ impl Module {
         self.element_count = n_elements;
 
         for _ in 0..n_elements {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
+            if it.empty() { return Err(Error::malformed(UNEXPECTED_END)); }
             let flags: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             if flags != 0 {
-                return Err(Malformed(INVALID_VALUE_TYPE));
+                return Err(Error::malformed(INVALID_VALUE_TYPE));
             }
             if self.table.is_none() {
-                return Err(Validation(UNKNOWN_TABLE));
+                return Err(Error::validation(UNKNOWN_TABLE));
             }
             validate_const(bytes, it, ValType::I32, &self.globals)?;
 
@@ -440,7 +562,7 @@ impl Module {
             for _ in 0..n_elems {
                 let elem_idx: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
                 if (elem_idx as usize) >= self.functions.len() {
-                    return Err(Validation(UNKNOWN_FUNC));
+                    return Err(Error::validation(UNKNOWN_FUNC));
                 }
                 self.functions[elem_idx as usize].is_declared = true;
             }
@@ -452,8 +574,11 @@ impl Module {
         let n_functions: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
         let n_imports = self.functions.iter().filter(|f| f.import.is_some()).count() as u32;
         if (n_functions + n_imports) as usize != self.functions.len() {
-            return Err(Malformed(FUNC_CODE_INCONSISTENT));
+            return Err(Error::malformed(FUNC_CODE_INCONSISTENT));
         }
+
+        // Initialize code range
+        self.side_table.set_code_range(usize::MAX, 0);
 
         for i in 0..self.functions.len() {
             if self.functions[i].import.is_some() {
@@ -473,14 +598,14 @@ impl Module {
                 let n_locals: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
                 let ty = it.read_u8()?;
                 if !is_val_type(ty) {
-                    return Err(Validation(INVALID_LOCAL_TYPE));
+                    return Err(Error::validation(INVALID_LOCAL_TYPE));
                 }
                 for _ in 0..n_locals {
                     let vt = val_type_from_byte(ty).unwrap();
                     let function = &mut self.functions[i];
                     function.locals.push(vt);
                     if function.locals.len() > Module::MAX_LOCALS {
-                        return Err(Malformed(TOO_MANY_LOCALS));
+                        return Err(Error::malformed(TOO_MANY_LOCALS));
                     }
                 }
             }
@@ -490,6 +615,9 @@ impl Module {
             let body_end_expected = body_start + body_length;
 
             self.functions[i].body = body_start..body_end_expected;
+
+            // Track code range (first body_start is minimal as we stream forward)
+            self.side_table.set_code_range(body_start, body_end_expected);
 
             // Validate function body immediately
             Validator::new(self).validate_function(i)?;
@@ -503,13 +631,13 @@ impl Module {
         let n_data_segments: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
 
         for _ in 0..n_data_segments {
-            if it.empty() { return Err(Malformed(UNEXPECTED_END)); }
+            if it.empty() { return Err(Error::malformed(UNEXPECTED_END)); }
             let segment_flag: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             if segment_flag != 0 {
-                return Err(Validation(INVALID_DATA_SEG_FLAG));
+                return Err(Error::validation(INVALID_DATA_SEG_FLAG));
             }
             if self.memory.is_none() {
-                return Err(Validation(UNKNOWN_MEMORY));
+                return Err(Error::validation(UNKNOWN_MEMORY));
             }
 
             let initializer_offset = it.cur();
@@ -517,7 +645,7 @@ impl Module {
 
             let data_length: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             if !it.has_n_left(data_length as usize) {
-                return Err(Malformed(UNEXPECTED_END));
+                return Err(Error::malformed(UNEXPECTED_END));
             }
 
             let data_start = it.cur();
@@ -534,6 +662,13 @@ impl Module {
 
 }
 
+// --------------- Side table helpers ---------------
+
+#[inline(always)]
+fn encode_control_sig(params_len: u16, has_result: bool) -> RuntimeSignature {
+    RuntimeSignature::control_from_counts(params_len as u32, has_result)
+}
+
 // ---------------- Helper Functions ----------------
 fn ignore_custom_section(bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
     while !it.empty() && it.peek_u8()? == 0 {
@@ -547,26 +682,26 @@ fn ignore_custom_section(bytes: &[u8], it: &mut ByteIter) -> Result<(), Error> {
         it.advance(1);
         let section_length: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
         if it.cur() + section_length as usize > bytes.len() {
-            return Err(Malformed(UNEXPECTED_END));
+            return Err(Error::malformed(UNEXPECTED_END));
         }
         let section_start = it.cur();
 
         // Read name length
         let name_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
         if it.cur() + name_len as usize > bytes.len() {
-            return Err(Malformed(UNEXPECTED_END));
+            return Err(Error::malformed(UNEXPECTED_END));
         }
         let name_start = it.cur();
         it.advance(name_len as usize);
 
         // Validate UTF-8 encoding
         if std::str::from_utf8(&bytes[name_start..name_start + name_len as usize]).is_err() {
-            return Err(Malformed(INVALID_UTF8));
+            return Err(Error::malformed(INVALID_UTF8));
         }
 
         // Ensure we didn't overrun the declared section length
         if section_start + (section_length as usize) < it.cur() {
-            return Err(Malformed(UNEXPECTED_END));
+            return Err(Error::malformed(UNEXPECTED_END));
         }
 
         // Advance to end of section
@@ -584,17 +719,17 @@ where
         let section_length: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
         let section_start = it.cur();
         if section_start + section_length as usize > bytes.len() {
-            return Err(Malformed(UNEXPECTED_END));
+            return Err(Error::malformed(UNEXPECTED_END));
         }
         reader(it)?;
         if it.cur() - section_start != section_length as usize {
-            return Err(Malformed(SECTION_SIZE_MISMATCH));
+            return Err(Error::malformed(SECTION_SIZE_MISMATCH));
         }
         if !it.empty() && it.peek_u8()? == id {
-            return Err(Malformed(JUNK_AFTER_LAST));
+            return Err(Error::malformed(JUNK_AFTER_LAST));
         }
     } else if !it.empty() && it.peek_u8()? > 11 {
-        return Err(Malformed(INVALID_SECTION_ID))
+        return Err(Error::malformed(INVALID_SECTION_ID))
     }
     ignore_custom_section(bytes, it)?;
     Ok(())
@@ -614,10 +749,10 @@ fn get_limits(bytes: &[u8], it: &mut ByteIter, upper: u32) -> Result<(u32, u32),
 fn get_memory_limits(bytes: &[u8], it: &mut ByteIter) -> Result<(u32, u32), Error> {
     let (initial, max) = get_limits(bytes, it, Module::MAX_PAGES)?;
     if initial > Module::MAX_PAGES || max > Module::MAX_PAGES {
-        return Err(Validation(MEMORY_SIZE_LIMIT));
+        return Err(Error::validation(MEMORY_SIZE_LIMIT));
     }
     if max < initial {
-        return Err(Validation(MIN_GREATER_THAN_MAX));
+        return Err(Error::validation(MIN_GREATER_THAN_MAX));
     }
     Ok((initial, max))
 }
@@ -625,7 +760,7 @@ fn get_memory_limits(bytes: &[u8], it: &mut ByteIter) -> Result<(u32, u32), Erro
 fn get_table_limits(bytes: &[u8], it: &mut ByteIter) -> Result<(u32, u32), Error> {
     let (initial, max) = get_limits(bytes, it, u32::MAX)?;
     if max < initial {
-        return Err(Validation(MIN_GREATER_THAN_MAX));
+        return Err(Error::validation(MIN_GREATER_THAN_MAX));
     }
     Ok((initial, max))
 }
@@ -634,6 +769,6 @@ fn mutability_from_byte(byte: u8) -> Result<bool, Error> {
     match byte {
         0 => Ok(false),
         1 => Ok(true),
-        _ => Err(Malformed(INVALID_MUTABILITY)),
+        _ => Err(Error::malformed(INVALID_MUTABILITY)),
     }
 }

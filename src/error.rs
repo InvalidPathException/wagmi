@@ -23,6 +23,19 @@ impl Display for Error {
 
 impl std::error::Error for Error {}
 
+impl Error {
+    #[cold] #[inline(never)]
+    pub fn malformed(msg: &'static str) -> Self { Error::Malformed(msg) }
+    #[cold] #[inline(never)]
+    pub fn validation(msg: &'static str) -> Self { Error::Validation(msg) }
+    #[cold] #[inline(never)]
+    pub fn trap(msg: &'static str) -> Self { Error::Trap(msg) }
+    #[cold] #[inline(never)]
+    pub fn link(msg: &'static str) -> Self { Error::Link(msg) }
+    #[cold] #[inline(never)]
+    pub fn uninstantiable(msg: &'static str) -> Self { Error::Uninstantiable(msg) }
+}
+
 // Malformed errors
 pub const END_EXPECTED: &str = "END opcode expected";
 pub const FUNC_CODE_INCONSISTENT: &str = "function and code section have inconsistent lengths";
