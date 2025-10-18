@@ -1,4 +1,6 @@
 #![allow(unsafe_code)]
+#![feature(explicit_tail_calls)]
+#![expect(incomplete_features)]
 pub mod wasm_memory;
 
 #[deny(unsafe_code)]
