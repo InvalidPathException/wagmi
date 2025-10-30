@@ -9,7 +9,8 @@ This file documents the coremark bench results to keep track of performance impr
     - repr(C) for the SideTableEntry struct caused mysterious improvements, not sure if it is a fluke
 - cc02503: avg = 855.71814, n = 20 (remove defensive malformed check in main loop)
     - since the module is already validated at run time, there is no reason for the check to exist, it was a remnant of early development phase that lacked proper handling for some malformed modules
-- current: no significant difference
+- a29d23: no significant difference
+- current: there is performance regression after introducing the tail-recursive change contrary to assumption that tail-recursion leads to better code generation, some more investigation is needed
 
 On nightly, the performance is slightly better (sometimes reaching 900)
 

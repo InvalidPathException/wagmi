@@ -28,3 +28,10 @@ Based on the [original paper by Ben L. Titzer](https://www.cs.tufts.edu/comp/150
 The spec test suite is from the [WebAssembly specification repository](https://github.com/WebAssembly/spec/releases/tag/list). The `wast2json` and `wat2wasm` binaries used are version 1.0.13 (1.0.14) [Windows version available here](https://github.com/WebAssembly/wabt/releases/tag/1.0.15).
 
 **Note:** This project specifically targets the WebAssembly 1.0 core standard. Newer test converters may not be compatible. There is no plan for development beyond 1.0 support.
+
+To compile/test/bench the tail version:
+The implementation of explicit tail calls has problems that breaks compilation as of Oct 30 2025. I created a [fix](https://github.com/rust-lang/rust/pull/148240) but it may take time to merge. Before this, you can clone and build [my fixed fork](https://github.com/InvalidPathException/rust) to test.
+```bash
+RUSTC=<the-fixed-rustc-path> cargo +nightly test --features tail_interpreter
+RUSTC=<the-fixed-rustc-path> cargo +nightly bench --features tail_interpreter
+```
