@@ -176,9 +176,7 @@ pub struct WasmTable {
 
 impl WasmTable {
     pub fn new(initial: u32, maximum: u32) -> Self {
-        let mut elements = Vec::new();
-        elements.resize(initial as usize, FuncRef::default());
-        Self { elements, current: initial, maximum }
+        Self { elements: vec![FuncRef::default(); initial as usize], current: initial, maximum }
     }
     pub fn size(&self) -> u32 { self.current }
     pub fn max(&self) -> u32 { self.maximum }
@@ -280,6 +278,12 @@ struct ControlFrame {
     has_result: bool,
 }
 
+#[derive(Copy, Clone)]
+struct CallFrame {
+    stack_base: usize,
+    ctrl_index: usize,
+}
+
 #[derive(Default)]
 pub struct Instance {
     pub id: u32,
@@ -298,6 +302,12 @@ impl Instance {
         InstanceManager::with(|mgr| mgr.register_instance(inst));
     }
 
+    fn resolve_import<'a>(imports: &'a Imports, import_ref: &crate::module::ImportRef) -> Result<&'a ExportValue, Error> {
+        imports.get(&import_ref.module)
+            .and_then(|m| m.get(&import_ref.field))
+            .ok_or(Error::link(UNKNOWN_IMPORT))
+    }
+
     pub fn instantiate(module: Rc<Module>, imports: &Imports) -> Result<Self, Error> {
         // Build the instance inside a Rc so we can register a Weak handle
         // for cross-instance func_ref dispatch even if instantiation ultimately fails.
@@ -310,7 +320,7 @@ impl Instance {
             // Memory
             if let Some(memory) = &module.memory {
                 if let Some(import_ref) = &memory.import {
-                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::link(UNKNOWN_IMPORT))?;
+                    let imported = Self::resolve_import(imports, import_ref)?;
                     match imported {
                         ExportValue::Memory(mem) => {
                             let m = mem.borrow();
@@ -328,7 +338,7 @@ impl Instance {
             // Tables
             if let Some(table) = &module.table {
                 if let Some(import_ref) = &table.import {
-                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::link(UNKNOWN_IMPORT))?;
+                    let imported = Self::resolve_import(imports, import_ref)?;
                     match imported {
                         ExportValue::Table(tab) => {
                             let tb = tab.borrow();
@@ -347,7 +357,7 @@ impl Instance {
             inst.functions.reserve(module.functions.len());
             for function in &module.functions {
                 if let Some(import_ref) = &function.import {
-                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::link(UNKNOWN_IMPORT))?;
+                    let imported = Self::resolve_import(imports, import_ref)?;
                     let runtime_sig = RuntimeSignature::from_signature(&function.ty);
                     match imported {
                         ExportValue::Function(f) => {
@@ -370,7 +380,7 @@ impl Instance {
             inst.globals.reserve(module.globals.len());
             for g in &module.globals {
                 if let Some(import_ref) = &g.import {
-                    let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::link(UNKNOWN_IMPORT))?;
+                    let imported = Self::resolve_import(imports, import_ref)?;
                     match imported {
                         ExportValue::Global(gl) => {
                             let gb = gl.as_ref();
@@ -486,12 +496,11 @@ impl Instance {
             let fi = start_idx as usize;
             let function = &inst_rc.functions[fi];
             if function.signature().n_params() != 0 || function.signature().has_result() { return Err(Error::validation(START_FUNC)); }
-            let mut stack = Vec::with_capacity(64);
+            let mut stack: Vec<WasmValue> = Vec::with_capacity(64);
             let mut return_pc = 0usize;
-            let mut control: Vec<ControlFrame> = Vec::new();
-            let mut bases: Vec<usize> = Vec::new();
-            let mut ctrl_bases = vec![];
-            match inst_rc.call_function_idx(fi, &mut return_pc, &mut stack, &mut control, &mut bases, &mut ctrl_bases) {
+            let mut control: Vec<ControlFrame> = Vec::with_capacity(16);
+            let mut call_frames: Vec<CallFrame> = Vec::with_capacity(8);
+            match inst_rc.call_function_idx(fi, &mut return_pc, &mut stack, &mut control, &mut call_frames) {
                 Ok(()) => {}
                 Err(Error::Trap(msg)) => {
                     // If there are live func_ref references to this instance,
@@ -515,8 +524,8 @@ impl Instance {
         pc: &mut usize,
         globals: &[Rc<WasmGlobal>]
     ) -> Result<WasmValue, Error> {
-        let bytes = &module.bytes;
-        let mut stack: Vec<WasmValue> = Vec::new();
+        let bytes: &[u8] = &module.bytes;
+        let mut stack: Vec<WasmValue> = Vec::with_capacity(4);
         loop {
             let op = bytes[*pc]; *pc += 1;
             match op {
@@ -545,8 +554,7 @@ impl Instance {
         locals_count: usize,
         stack: &mut Vec<WasmValue>,
         control: &mut Vec<ControlFrame>,
-        func_bases: &mut Vec<usize>,
-        ctrl_bases: &mut Vec<usize>,
+        call_frames: &mut Vec<CallFrame>,
         return_dest: usize
     ) -> Result<usize, Error> {
         let n_params = runtime_sig.n_params() as usize;
@@ -569,14 +577,51 @@ impl Instance {
             return Err(Error::trap(STACK_EXHAUSTED));
         }
 
-        // Track function frame bases
-        func_bases.push(locals_start);
-        ctrl_bases.push(control.len() - 1);
+        // Track function frame
+        call_frames.push(CallFrame {
+            stack_base: locals_start,
+            ctrl_index: control.len() - 1,
+        });
 
         // Return the function's start PC
         Ok(pc_start)
     }
 
+    /// Dispatch a host function call, handling params and optional result.
+    #[inline(always)]
+    fn call_host(
+        callback: &dyn Fn(&[WasmValue]) -> Option<WasmValue>,
+        runtime_sig: RuntimeSignature,
+        stack: &mut Vec<WasmValue>,
+    ) {
+        let param_count = runtime_sig.n_params() as usize;
+        let params_start = stack.len() - param_count;
+        if let Some(result) = callback(&stack[params_start..]) {
+            stack.truncate(params_start);
+            stack.push(result);
+        } else {
+            stack.truncate(params_start);
+        }
+    }
+
+    /// Dispatch a cross-instance call by copying params to a temporary stack.
+    fn call_remote(
+        owner: &Instance,
+        function_index: usize,
+        n_params: usize,
+        stack: &mut Vec<WasmValue>,
+    ) -> Result<(), Error> {
+        let params_start = stack.len() - n_params;
+        let mut tmp_stack: Vec<WasmValue> = Vec::with_capacity(n_params);
+        tmp_stack.extend_from_slice(&stack[params_start..(params_start + n_params)]);
+        stack.truncate(params_start);
+        let mut control_nested: Vec<ControlFrame> = Vec::with_capacity(16);
+        let mut ret_pc_nested = 0usize;
+        let mut call_frames_nested: Vec<CallFrame> = Vec::with_capacity(8);
+        owner.call_function_idx(function_index, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut call_frames_nested)?;
+        stack.extend(tmp_stack);
+        Ok(())
+    }
 
     #[inline(always)]
     fn call_function_idx(
@@ -585,35 +630,27 @@ impl Instance {
         return_pc: &mut usize,
         stack: &mut Vec<WasmValue>,
         control: &mut Vec<ControlFrame>,
-        func_bases: &mut Vec<usize>,
-        ctrl_bases: &mut Vec<usize>
+        call_frames: &mut Vec<CallFrame>,
     ) -> Result<(), Error> {
         const MAX_CALL_DEPTH: usize = 1000;
-        if func_bases.len() >= MAX_CALL_DEPTH {
+        if call_frames.len() >= MAX_CALL_DEPTH {
             return Err(Error::trap(STACK_EXHAUSTED));
         }
         let fi = &self.functions[idx];
         match fi {
             RuntimeFunction::OwnedWasm { runtime_sig, pc_start, locals_count } => {
-                let pc = Self::setup_wasm_function_call(*runtime_sig, *pc_start, *locals_count, stack, control, func_bases, ctrl_bases, *return_pc)?;
-                self.interpret(pc, stack, control, func_bases, ctrl_bases)?;
+                let pc = Self::setup_wasm_function_call(*runtime_sig, *pc_start, *locals_count, stack, control, call_frames, *return_pc)?;
+                self.interpret(pc, stack, control, call_frames)?;
             }
             RuntimeFunction::ImportedWasm { owner, function_index, .. } => {
                 if let Some(owner_rc) = owner.upgrade() {
-                    owner_rc.call_function_idx(*function_index, return_pc, stack, control, func_bases, ctrl_bases)?;
+                    owner_rc.call_function_idx(*function_index, return_pc, stack, control, call_frames)?;
                 } else {
                     return Err(Error::trap(FUNC_NO_IMPL));
                 }
             }
             RuntimeFunction::Host { callback, runtime_sig } => {
-                let param_count = runtime_sig.n_params() as usize;
-                let params_start = stack.len() - param_count;
-                if let Some(result) = callback(&stack[params_start..]) {
-                    stack.truncate(params_start);
-                    stack.push(result);
-                } else {
-                    stack.truncate(params_start);
-                }
+                Self::call_host(callback.as_ref(), *runtime_sig, stack);
             }
         }
         Ok(())
@@ -624,13 +661,12 @@ impl Instance {
         mut pc: usize,
         stack: &mut Vec<WasmValue>,
         control: &mut Vec<ControlFrame>,
-        func_bases: &mut Vec<usize>,
-        ctrl_bases: &mut Vec<usize>
+        call_frames: &mut Vec<CallFrame>,
     ) -> Result<(), Error> {
         let bytes: &[u8] = &self.module.bytes;
         let mem = self.memory.as_ref();
         let tab = self.table.as_ref();
-        let mut current_base = *func_bases.last().unwrap();
+        let mut current_base = call_frames.last().unwrap().stack_base;
 
         macro_rules! next_op { () => {{ let byte = unsafe { *bytes.get_unchecked(pc) }; pc += 1; byte }} }
         macro_rules! pop_val { () => {{
@@ -920,16 +956,14 @@ impl Instance {
                 }
                 0x0b => { // end
                     // Check if we're at a function boundary
-                    if let Some(&frame_idx) = ctrl_bases.last() {
-                        if frame_idx == control.len().saturating_sub(1) {
+                    if let Some(frame) = call_frames.last() {
+                        if frame.ctrl_index == control.len().saturating_sub(1) {
                             if Instance::branch(&mut pc, stack, control, 0) {
-                                ctrl_bases.pop();
-                                let _ = func_bases.pop();
+                                call_frames.pop();
                                 return Ok(());
                             }
-                            ctrl_bases.pop();
-                            let _ = func_bases.pop();
-                            current_base = *func_bases.last().unwrap();
+                            call_frames.pop();
+                            current_base = call_frames.last().unwrap().stack_base;
                             continue; // Skip the regular block logic
                         }
                     }
@@ -963,16 +997,14 @@ impl Instance {
                 }
                 0x0f => { // return
                     if control.is_empty() { return Ok(()); }
-                    let base_idx = *ctrl_bases.last().unwrap();
+                    let base_idx = call_frames.last().unwrap().ctrl_index;
                     let depth = (control.len() - 1).saturating_sub(base_idx) as u32;
                     if Instance::branch(&mut pc, stack, control, depth) {
-                        ctrl_bases.pop();
-                        let _ = func_bases.pop();
+                        call_frames.pop();
                         return Ok(());
                     }
-                    ctrl_bases.pop();
-                    let _ = func_bases.pop();
-                    current_base = *func_bases.last().unwrap();
+                    call_frames.pop();
+                    current_base = call_frames.last().unwrap().stack_base;
                 }
                 // Call instructions
                 0x10 => { // call
@@ -984,35 +1016,15 @@ impl Instance {
                     
                     match f {
                         RuntimeFunction::OwnedWasm { runtime_sig, pc_start, locals_count } => {
-                            pc = Self::setup_wasm_function_call(*runtime_sig, *pc_start, *locals_count, stack, control, func_bases, ctrl_bases, pc)?;
-                            current_base = *func_bases.last().unwrap();
+                            pc = Self::setup_wasm_function_call(*runtime_sig, *pc_start, *locals_count, stack, control, call_frames, pc)?;
+                            current_base = call_frames.last().unwrap().stack_base;
                         }
                         RuntimeFunction::ImportedWasm { owner, function_index, runtime_sig } => {
-                            if let Some(owner_rc) = owner.upgrade() {
-                                let n_params = runtime_sig.n_params() as usize;
-                                let params_start = stack.len() - n_params;
-                                let mut tmp_stack: Vec<WasmValue> = Vec::with_capacity(n_params);
-                                tmp_stack.extend_from_slice(&stack[params_start..(n_params + params_start)]);
-                                stack.truncate(params_start);
-                                let mut control_nested: Vec<ControlFrame> = Vec::new();
-                                let mut ret_pc_nested = 0usize;
-                                let mut func_bases_nested: Vec<usize> = Vec::new();
-                                let mut ctrl_bases_nested = vec![];
-                                owner_rc.call_function_idx(*function_index, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut func_bases_nested, &mut ctrl_bases_nested)?;
-                                stack.extend(tmp_stack);
-                            } else {
-                                return Err(Error::trap(FUNC_NO_IMPL));
-                            }
+                            let owner_rc = owner.upgrade().ok_or(Error::trap(FUNC_NO_IMPL))?;
+                            Self::call_remote(&owner_rc, *function_index, runtime_sig.n_params() as usize, stack)?;
                         }
                         RuntimeFunction::Host { callback, runtime_sig } => {
-                            let param_count = runtime_sig.n_params() as usize;
-                            let params_start = stack.len() - param_count;
-                            if let Some(result) = callback(&stack[params_start..]) {
-                                stack.truncate(params_start);
-                                stack.push(result);
-                            } else {
-                                stack.truncate(params_start);
-                            }
+                            Self::call_host(callback.as_ref(), *runtime_sig, stack);
                         }
                     }
                 }
@@ -1047,39 +1059,24 @@ impl Instance {
                     let expected = RuntimeSignature::from_signature(&self.module.types[type_idx as usize]);
 
                     if owner_id != self.id {
-                        let mut dispatched = false;
+                        let mut result: Option<Result<(), Error>> = None;
                         let mut sig_ok = false;
                         InstanceManager::with(|mgr| {
                             if let Some(owner) = mgr.get_instance(owner_id) {
                                 let callee = &owner.functions[func_idx];
                                 sig_ok = callee.signature() == expected;
                                 if sig_ok {
-                                    let n_params = callee.param_count();
-                                    let params_start = stack.len() - n_params;
-                                    let mut tmp_stack: Vec<WasmValue> = Vec::with_capacity(n_params);
-                                    tmp_stack.extend_from_slice(&stack[params_start..(params_start + n_params)]);
-                                    stack.truncate(params_start);
-                                    let mut control_nested: Vec<ControlFrame> = Vec::new();
-                                    let mut ret_pc_nested = 0usize;
-                                    let mut func_bases_nested: Vec<usize> = Vec::new();
-                                    let mut ctrl_bases_nested = vec![];
-                                    match owner.call_function_idx(func_idx, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut func_bases_nested, &mut ctrl_bases_nested) {
-                                        Ok(()) => {
-                                            stack.extend(tmp_stack);
-                                            dispatched = true;
-                                        }
-                                        Err(_e) => {}
-                                    }
+                                    result = Some(Self::call_remote(&owner, func_idx, callee.param_count(), stack));
                                 }
                             }
                         });
                         if !sig_ok {
                             return Err(Error::trap(INDIRECT_CALL_MISMATCH));
                         }
-                        if dispatched {
-                            continue;
-                        } else {
-                            return Err(Error::trap(FUNC_NO_IMPL));
+                        match result {
+                            Some(Ok(())) => continue,
+                            Some(Err(e)) => return Err(e),
+                            None => return Err(Error::trap(FUNC_NO_IMPL)),
                         }
                     }
 
@@ -1090,35 +1087,15 @@ impl Instance {
 
                     match callee {
                         RuntimeFunction::ImportedWasm { runtime_sig, owner, function_index } => {
-                            if let Some(owner_rc) = owner.upgrade() {
-                                let n_params = runtime_sig.n_params() as usize;
-                                let params_start = stack.len() - n_params;
-                                let mut tmp_stack: Vec<WasmValue> = Vec::with_capacity(n_params);
-                                tmp_stack.extend_from_slice(&stack[params_start..(params_start + n_params)]);
-                                stack.truncate(params_start);
-                                let mut control_nested: Vec<ControlFrame> = Vec::new();
-                                let mut ret_pc_nested = 0usize;
-                                let mut func_bases_nested: Vec<usize> = Vec::new();
-                                let mut ctrl_bases_nested = vec![];
-                                owner_rc.call_function_idx(*function_index, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut func_bases_nested, &mut ctrl_bases_nested)?;
-                                stack.extend(tmp_stack);
-                            } else {
-                                return Err(Error::trap(FUNC_NO_IMPL));
-                            }
+                            let owner_rc = owner.upgrade().ok_or(Error::trap(FUNC_NO_IMPL))?;
+                            Self::call_remote(&owner_rc, *function_index, runtime_sig.n_params() as usize, stack)?;
                         }
                         RuntimeFunction::OwnedWasm { runtime_sig, pc_start, locals_count } => {
-                            pc = Self::setup_wasm_function_call(*runtime_sig, *pc_start, *locals_count, stack, control, func_bases, ctrl_bases, pc)?;
-                            current_base = *func_bases.last().unwrap();
+                            pc = Self::setup_wasm_function_call(*runtime_sig, *pc_start, *locals_count, stack, control, call_frames, pc)?;
+                            current_base = call_frames.last().unwrap().stack_base;
                         }
                         RuntimeFunction::Host { callback, runtime_sig } => {
-                            let param_count = runtime_sig.n_params() as usize;
-                            let params_start = stack.len() - param_count;
-                            if let Some(result) = callback(&stack[params_start..]) {
-                                stack.truncate(params_start);
-                                stack.push(result);
-                            } else {
-                                stack.truncate(params_start);
-                            }
+                            Self::call_host(callback.as_ref(), *runtime_sig, stack);
                         }
                     }
                 }
@@ -1390,37 +1367,30 @@ impl Instance {
 
         let mut stack: Vec<WasmValue> = Vec::with_capacity(1024);
         stack.extend_from_slice(args);
-        let mut control: Vec<ControlFrame> = Vec::new();
-        let mut func_bases: Vec<usize> = Vec::new();
+        let mut control: Vec<ControlFrame> = Vec::with_capacity(64);
+        let mut call_frames: Vec<CallFrame> = Vec::with_capacity(16);
         let return_pc: usize = 0;
 
         match func {
             RuntimeFunction::OwnedWasm { runtime_sig, pc_start, locals_count } => {
-                let mut ctrl_bases = Vec::new();
-                let pc = Self::setup_wasm_function_call(*runtime_sig, *pc_start, *locals_count, &mut stack, &mut control, &mut func_bases, &mut ctrl_bases, return_pc)?;
-                self.interpret(pc, &mut stack, &mut control, &mut func_bases, &mut ctrl_bases)?;
+                let pc = Self::setup_wasm_function_call(*runtime_sig, *pc_start, *locals_count, &mut stack, &mut control, &mut call_frames, return_pc)?;
+                self.interpret(pc, &mut stack, &mut control, &mut call_frames)?;
             }
             RuntimeFunction::ImportedWasm { owner, function_index, .. } => {
                 if let Some(owner_rc) = owner.upgrade() {
-                    let mut owned_stack = Vec::with_capacity(64);
+                    let mut owned_stack: Vec<WasmValue> = Vec::with_capacity(64);
                     owned_stack.extend_from_slice(args);
-                    let mut control: Vec<ControlFrame> = Vec::new();
+                    let mut control: Vec<ControlFrame> = Vec::with_capacity(16);
                     let mut return_pc: usize = 0;
-                    let mut func_bases: Vec<usize> = Vec::new();
-                    let mut ctrl_bases = vec![];
-                    owner_rc.call_function_idx(*function_index, &mut return_pc, &mut owned_stack, &mut control, &mut func_bases, &mut ctrl_bases)?;
+                    let mut call_frames: Vec<CallFrame> = Vec::with_capacity(8);
+                    owner_rc.call_function_idx(*function_index, &mut return_pc, &mut owned_stack, &mut control, &mut call_frames)?;
                     return Ok(owned_stack);
                 } else {
                     return Err(Error::trap(FUNC_NO_IMPL));
                 }
             }
-            RuntimeFunction::Host { callback, .. } => {
-                if let Some(result) = callback(&stack) {
-                    stack.clear();
-                    stack.push(result);
-                } else {
-                    stack.clear();
-                }
+            RuntimeFunction::Host { callback, runtime_sig, .. } => {
+                Self::call_host(callback.as_ref(), *runtime_sig, &mut stack);
             }
         }
         Ok(stack)

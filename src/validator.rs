@@ -103,7 +103,7 @@ impl ValidatorStack {
 
 // ---------------- Constant Expression Validation ----------------
 pub fn validate_const(bytes: &[u8], it: &mut ByteIter, expected: ValType, globals: &[Global]) -> Result<(), Error> {
-    let mut stack: Vec<ValType> = Vec::new();
+    let mut stack: Vec<ValType> = Vec::with_capacity(4);
     loop {
         let byte = it.read_u8()?;
         if byte == 0x0b { // end
