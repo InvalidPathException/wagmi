@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::Range;
 use std::rc::Rc;
 
 use crate::byte_iter::*;
@@ -37,7 +38,7 @@ impl ExternType {
 // ---------------- Structures ----------------
 #[derive(Clone)]
 pub struct Function {
-    pub body: std::ops::Range<usize>,
+    pub body: Range<usize>,
     pub ty: Signature,
     pub locals: Vec<ValType>,
     pub import: Option<ImportRef>,
@@ -70,7 +71,7 @@ pub struct Global {
 pub struct Export { pub extern_type: ExternType, pub idx: u32 }
 
 #[derive(Clone)]
-pub struct DataSegment { pub data_range: std::ops::Range<usize>, pub initializer_offset: usize }
+pub struct DataSegment { pub data_range: Range<usize>, pub initializer_offset: usize }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -257,8 +258,8 @@ impl Module {
     }
 
     fn initialize(&mut self) -> Result<(), Error> {
-        // Copy to get around borrow checker
-        let bytes: &[u8] = &self.bytes.clone()[..];
+        // Rc::clone to get a separate handle, avoids borrow conflict with &mut self in closures
+        let bytes: &[u8] = &self.bytes.clone();
         
         // Check magic number and version
         if bytes.len() < 4 { return Err(Error::malformed(UNEXPECTED_END_SHORT)); }
@@ -346,22 +347,20 @@ impl Module {
             // Module name
             let module_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             let module_start = it.idx;
-            if module_start + module_len as usize > bytes.len() {
-                return Err(Error::malformed(UNEXPECTED_END));
-            }
-            let module_name = String::from_utf8(bytes[module_start..module_start + module_len as usize].to_vec())
-                .map_err(|_| Error::malformed(INVALID_UTF8))?;
-            it.idx = module_start + module_len as usize;
+            let module_end = module_start + module_len as usize;
+            if module_end > bytes.len() { return Err(Error::malformed(UNEXPECTED_END)); }
+            let module_name = std::str::from_utf8(&bytes[module_start..module_end])
+                .map_err(|_| Error::malformed(INVALID_UTF8))?.to_owned();
+            it.idx = module_end;
 
             // Field name
             let field_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             let field_start = it.idx;
-            if field_start + field_len as usize > bytes.len() {
-                return Err(Error::malformed(UNEXPECTED_END));
-            }
-            let field_name = String::from_utf8(bytes[field_start..field_start + field_len as usize].to_vec())
-                .map_err(|_| Error::malformed(INVALID_UTF8))?;
-            it.idx = field_start + field_len as usize;
+            let field_end = field_start + field_len as usize;
+            if field_end > bytes.len() { return Err(Error::malformed(UNEXPECTED_END)); }
+            let field_name = std::str::from_utf8(&bytes[field_start..field_end])
+                .map_err(|_| Error::malformed(INVALID_UTF8))?.to_owned();
+            it.idx = field_end;
 
             let extern_type = ExternType::from_byte(it.read_u8()?)
                 .ok_or(Error::malformed(MALFORMED_IMPORT_KIND))?;
@@ -508,11 +507,11 @@ impl Module {
 
             let name_len: u32 = safe_read_leb128(bytes, &mut it.idx, 32)?;
             let name_start = it.idx;
-            if name_start + name_len as usize > bytes.len() {
-                return Err(Error::malformed(UNEXPECTED_END));
-            }
-            let name = String::from_utf8(bytes[name_start..name_start + name_len as usize].to_vec()).unwrap();
-            it.idx = name_start + name_len as usize;
+            let name_end = name_start + name_len as usize;
+            if name_end > bytes.len() { return Err(Error::malformed(UNEXPECTED_END)); }
+            let name = std::str::from_utf8(&bytes[name_start..name_end])
+                .map_err(|_| Error::malformed(INVALID_UTF8))?.to_owned();
+            it.idx = name_end;
 
             let byte = it.read_u8()?;
             let extern_type = ExternType::from_byte(byte)

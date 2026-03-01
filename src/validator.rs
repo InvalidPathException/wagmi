@@ -297,8 +297,7 @@ fn validate_else(_: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut Valid
         _ => return Err(Error::validation(ELSE_MUST_CLOSE_IF)),
     };
     
-    // Push else frame with same signature
-    let params = frame.sig.params.clone();
+    vs.push_vals(&frame.sig.params);
     vs.push_frame(ControlFrame {
         sig: frame.sig,
         height: frame.height,
@@ -306,7 +305,6 @@ fn validate_else(_: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut Valid
         control_type: new_control_type,
         sig_pc: frame.sig_pc,
     });
-    vs.push_vals(&params);
     Ok(Action::Continue)
 }
 

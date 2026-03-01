@@ -426,19 +426,19 @@ impl Instance {
             }
 
             // Validate data segments (bounds check, defer writes)
-            let mut pending_data: Vec<(u32, Vec<u8>)> = Vec::new();
+            let mut pending_data: Vec<(u32, usize, usize)> = Vec::new();
             if let Some(mem) = &inst.memory {
                 for seg in &module.data_segments {
                     let mut ip = seg.initializer_offset;
                     let offset = Instance::eval_const(&module, &mut ip, &inst.globals)?.as_u32();
-                    let bytes_vec = module.bytes[seg.data_range.clone()].to_vec();
+                    let data_len = seg.data_range.end - seg.data_range.start;
                     let m = mem.borrow();
-                    let end = (offset as usize).saturating_add(bytes_vec.len());
+                    let end = (offset as usize).saturating_add(data_len);
                     if end > (m.size() as usize) * (WasmMemory::PAGE_SIZE as usize) {
                         return Err(Error::link(DATA_SEG_DNF));
                     }
                     drop(m);
-                    pending_data.push((offset, bytes_vec));
+                    pending_data.push((offset, seg.data_range.start, seg.data_range.end));
                 }
             }
 
@@ -466,8 +466,8 @@ impl Instance {
             // Apply data segments (writes), after elements
             if let Some(mem) = &inst.memory {
                 let mut m = mem.borrow_mut();
-                for (offset, bytes_vec) in &pending_data {
-                    m.write_bytes(*offset, bytes_vec).map_err(Error::trap)?;
+                for &(offset, start, end) in &pending_data {
+                    m.write_bytes(offset, &module.bytes[start..end]).map_err(Error::trap)?;
                 }
             }
 
@@ -723,29 +723,25 @@ impl Instance {
         }
         macro_rules! shift {
             (u32, $op:tt) => {{
-                let b = pop_val!().as_u32() % 32;
-                let a = pop_val!().as_u32();
-                stack.push(WasmValue::from_u32(a $op b));
+                let (a, b) = peek_two!(u32);
+                overwrite!(WasmValue::from_u32(a $op (b % 32)));
             }};
             (u64, $op:tt) => {{
-                let b = pop_val!().as_u64() % 64;
-                let a = pop_val!().as_u64();
-                stack.push(WasmValue::from_u64(a $op b));
+                let (a, b) = peek_two!(u64);
+                overwrite!(WasmValue::from_u64(a $op (b % 64)));
             }};
         }
         macro_rules! rotate {
             (u32, $dir:ident) => {{
-                let b = pop_val!().as_u32();
-                let a = pop_val!().as_u32();
+                let (a, b) = peek_two!(u32);
                 paste! {
-                    stack.push(WasmValue::from_u32(a.[<rotate_ $dir>](b % 32)));
+                    overwrite!(WasmValue::from_u32(a.[<rotate_ $dir>](b % 32)));
                 }
             }};
             (u64, $dir:ident) => {{
-                let b = pop_val!().as_u64();
-                let a = pop_val!().as_u64();
+                let (a, b) = peek_two!(u64);
                 paste! {
-                    stack.push(WasmValue::from_u64(a.[<rotate_ $dir>]((b % 64) as u32)));
+                    overwrite!(WasmValue::from_u64(a.[<rotate_ $dir>]((b % 64) as u32)));
                 }
             }};
         }
@@ -762,8 +758,7 @@ impl Instance {
             ($type:ident, max) => {{ minmax!(@impl $type, max, false) }};
             (@impl $type:ident, $op:ident, $want_negative:literal) => {{
                 paste! {
-                    let b = pop_val!().[<as_ $type>]();
-                    let a = pop_val!().[<as_ $type>]();
+                    let (a, b) = peek_two!($type);
 
                     let result = if a.is_nan() {
                         a
@@ -777,25 +772,23 @@ impl Instance {
                         a.$op(b)
                     };
 
-                    stack.push(WasmValue::[<from_ $type>](result));
+                    overwrite!(WasmValue::[<from_ $type>](result));
                 }
             }};
         }
         macro_rules! shr_s {
             ($int_type:ident, $uint_type:ident, $bits:literal) => {{
                 paste! {
-                    let b = pop_val!().[<as_ $uint_type>]() % $bits;
-                    let a = pop_val!().[<as_ $int_type>]();
-                    stack.push(WasmValue::[<from_ $int_type>](a >> b));
+                    let (a, b) = peek_two!($int_type);
+                    overwrite!(WasmValue::[<from_ $int_type>](a >> (b as $uint_type % $bits)));
                 }
             }};
         }
         macro_rules! copysign {
             ($type:ident) => {{
                 paste! {
-                    let b = pop_val!().[<as_ $type>]();
-                    let a = pop_val!().[<as_ $type>]();
-                    stack.push(WasmValue::[<from_ $type>](a.copysign(b)));
+                    let (a, b) = peek_two!($type);
+                    overwrite!(WasmValue::[<from_ $type>](a.copysign(b)));
                 }
             }};
         }
@@ -851,45 +844,38 @@ impl Instance {
         macro_rules! div_s {
             ($int_type:ident) => {{
                 paste! {
-                    let b = pop_val!().[<as_ $int_type>]();
-                    let a = pop_val!().[<as_ $int_type>]();
+                    let (a, b) = peek_two!($int_type);
                     if b == 0 { return Err(Error::trap(DIVIDE_BY_ZERO)); }
                     if a == $int_type::MIN && b == -1 { return Err(Error::trap(INTEGER_OVERFLOW)); }
-                    stack.push(WasmValue::[<from_ $int_type>](a / b));
+                    overwrite!(WasmValue::[<from_ $int_type>](a / b));
                 }
             }};
         }
         macro_rules! div_u {
             ($uint_type:ident) => {{
                 paste! {
-                    let b = pop_val!().[<as_ $uint_type>]();
-                    let a = pop_val!().[<as_ $uint_type>]();
+                    let (a, b) = peek_two!($uint_type);
                     if b == 0 { return Err(Error::trap(DIVIDE_BY_ZERO)); }
-                    stack.push(WasmValue::[<from_ $uint_type>](a / b));
+                    overwrite!(WasmValue::[<from_ $uint_type>](a / b));
                 }
             }};
         }
         macro_rules! rem_s {
             ($int_type:ident) => {{
                 paste! {
-                    let b = pop_val!().[<as_ $int_type>]();
-                    let a = pop_val!().[<as_ $int_type>]();
+                    let (a, b) = peek_two!($int_type);
                     if b == 0 { return Err(Error::trap(DIVIDE_BY_ZERO)); }
-                    if a == $int_type::MIN && b == -1 {
-                        stack.push(WasmValue::[<from_ $int_type>](0));
-                    } else {
-                        stack.push(WasmValue::[<from_ $int_type>](a % b));
-                    }
+                    let result = if a == $int_type::MIN && b == -1 { 0 } else { a % b };
+                    overwrite!(WasmValue::[<from_ $int_type>](result));
                 }
             }};
         }
         macro_rules! rem_u {
             ($uint_type:ident) => {{
                 paste! {
-                    let b = pop_val!().[<as_ $uint_type>]();
-                    let a = pop_val!().[<as_ $uint_type>]();
+                    let (a, b) = peek_two!($uint_type);
                     if b == 0 { return Err(Error::trap(DIVIDE_BY_ZERO)); }
-                    stack.push(WasmValue::[<from_ $uint_type>](a % b));
+                    overwrite!(WasmValue::[<from_ $uint_type>](a % b));
                 }
             }};
         }
