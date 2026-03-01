@@ -71,10 +71,11 @@ impl ValidatorStack {
     }
 
     pub fn pop_vals(&mut self, types: &[ValType]) -> Result<Vec<ValType>, Error> {
-        let mut popped = Vec::new();
+        let mut popped = Vec::with_capacity(types.len());
         for &ty in types.iter().rev() {
-            popped.insert(0, self.pop_val_expect(ty)?);
+            popped.push(self.pop_val_expect(ty)?);
         }
+        popped.reverse();
         Ok(popped)
     }
 
@@ -410,8 +411,9 @@ fn validate_br_if(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut Vali
 }
 
 fn validate_br_table(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut ValidatorStack) -> Result<Action, Error> {
+    let br_pc = it.cur(); // PC right after the 0x0e opcode
     vs.pop_val_expect(ValType::I32)?;
-    
+
     let n_targets: u32 = safe_read_leb128(&m.bytes, &mut it.idx, 32)?;
     let mut targets: Vec<u32> = Vec::with_capacity(n_targets as usize + 1);
     for _ in 0..n_targets {
@@ -437,7 +439,7 @@ fn validate_br_table(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut V
         ControlType::Loop => default_frame.sig.params.clone(),
         _ => default_frame.sig.result.into_iter().collect(),
     };
-    
+
     // Check all targets have same types
     for &depth in &targets {
         let target = vs.get_frame(vs.frame_count() - (depth as usize) - 1).unwrap();
@@ -453,6 +455,7 @@ fn validate_br_table(m: &mut Module, it: &mut ByteIter, _: &Function, vs: &mut V
     // Pop the verified types and mark unreachable
     vs.pop_vals(&expected_types)?;
     vs.unreachable();
+    m.side_table.put_br_table(br_pc, &targets);
     Ok(Action::Continue)
 }
 

@@ -198,8 +198,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  Globals: {}", module.globals.len());
         }
         
-        if module.start != u32::MAX {
-            println!("  Start function: index {}", module.start);
+        if let Some(start_idx) = module.start {
+            println!("  Start function: index {}", start_idx);
         }
         
         if module.n_data > 0 {

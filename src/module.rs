@@ -86,6 +86,7 @@ pub struct SideTable {
     entries: Vec<SideTableEntry>,
     code_base: usize,
     code_end: usize,
+    br_targets: Vec<u32>,
 }
 
 impl Default for SideTable {
@@ -95,6 +96,7 @@ impl Default for SideTable {
             entries: Vec::new(),
             code_base: usize::MAX,
             code_end: 0,
+            br_targets: Vec::new(),
         }
     }
 }
@@ -196,6 +198,28 @@ impl SideTable {
             self.code_end = end;
         }
     }
+
+    pub fn put_br_table(&mut self, abs_pc: usize, targets: &[u32]) {
+        let offset = self.br_targets.len() as u32;
+        let count = targets.len() as u32;
+        self.br_targets.extend_from_slice(targets);
+        if let Some(entry) = self.entry_mut(abs_pc) {
+            entry.body_pc = offset;
+            entry.end_pc = count;
+            entry.control_sig = RuntimeSignature::control_from_counts(0, false);
+        }
+    }
+
+    #[inline(always)]
+    pub fn lookup_br_table(&self, abs_pc: usize, index: u32) -> Option<u32> {
+        let entry = self.entry_for(abs_pc)?;
+        if !entry.control_sig.is_present() { return None; }
+        let offset = entry.body_pc as usize;
+        let count = entry.end_pc as usize;
+        if count == 0 { return None; }
+        let idx = if (index as usize) < count - 1 { index as usize } else { count - 1 };
+        Some(self.br_targets[offset + idx])
+    }
 }
 
 // ---------------- Module Structure ----------------
@@ -208,7 +232,7 @@ pub struct Module {
     pub memory: Option<Memory>,
     pub globals: Vec<Global>,
     pub exports: HashMap<String, Export>,
-    pub start: u32,
+    pub start: Option<u32>,
     pub element_start: usize,
     pub element_count: u32,
     pub functions: Vec<Function>,
@@ -225,7 +249,6 @@ impl Module {
         // Other than bytecode and default start cursor, everything starts as empty/None
         let mut m = Module {
             bytes: Rc::new(bytes),
-            start: u32::MAX,
             side_table: SideTable::default(),
             ..Default::default()
         };
@@ -538,7 +561,7 @@ impl Module {
         if (start as usize) >= self.functions.len() {
             return Err(Error::validation(UNKNOWN_FUNC));
         }
-        self.start = start;
+        self.start = Some(start);
         Ok(())
     }
 

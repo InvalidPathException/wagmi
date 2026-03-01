@@ -13,22 +13,22 @@ use std::rc::{Rc, Weak};
 pub struct WasmValue(pub u64);
 
 impl WasmValue {
-    #[inline] pub fn from_i32(v: i32) -> Self { Self(v as u32 as u64) }
-    #[inline] pub fn as_i32(self) -> i32 { self.0 as u32 as i32 }
-    #[inline] pub fn from_u32(v: u32) -> Self { Self(v as u64) }
-    #[inline] pub fn as_u32(self) -> u32 { self.0 as u32 }
-    #[inline] pub fn from_i64(v: i64) -> Self { Self(v as u64) }
-    #[inline] pub fn as_i64(self) -> i64 { self.0 as i64 }
-    #[inline] pub fn from_u64(v: u64) -> Self { Self(v) }
-    #[inline] pub fn as_u64(self) -> u64 { self.0 }
-    #[inline] pub fn from_f32_bits(bits: u32) -> Self { Self(bits as u64) }
-    #[inline] pub fn as_f32_bits(self) -> u32 { self.0 as u32 }
-    #[inline] pub fn from_f64_bits(bits: u64) -> Self { Self(bits) }
-    #[inline] pub fn as_f64_bits(self) -> u64 { self.0 }
-    #[inline] pub fn from_f32(v: f32) -> Self { Self::from_f32_bits(v.to_bits()) }
-    #[inline] pub fn as_f32(self) -> f32 { f32::from_bits(self.as_f32_bits()) }
-    #[inline] pub fn from_f64(v: f64) -> Self { Self::from_f64_bits(v.to_bits()) }
-    #[inline] pub fn as_f64(self) -> f64 { f64::from_bits(self.as_f64_bits()) }
+    #[inline(always)] pub fn from_i32(v: i32) -> Self { Self(v as u32 as u64) }
+    #[inline(always)] pub fn as_i32(self) -> i32 { self.0 as u32 as i32 }
+    #[inline(always)] pub fn from_u32(v: u32) -> Self { Self(v as u64) }
+    #[inline(always)] pub fn as_u32(self) -> u32 { self.0 as u32 }
+    #[inline(always)] pub fn from_i64(v: i64) -> Self { Self(v as u64) }
+    #[inline(always)] pub fn as_i64(self) -> i64 { self.0 as i64 }
+    #[inline(always)] pub fn from_u64(v: u64) -> Self { Self(v) }
+    #[inline(always)] pub fn as_u64(self) -> u64 { self.0 }
+    #[inline(always)] pub fn from_f32_bits(bits: u32) -> Self { Self(bits as u64) }
+    #[inline(always)] pub fn as_f32_bits(self) -> u32 { self.0 as u32 }
+    #[inline(always)] pub fn from_f64_bits(bits: u64) -> Self { Self(bits) }
+    #[inline(always)] pub fn as_f64_bits(self) -> u64 { self.0 }
+    #[inline(always)] pub fn from_f32(v: f32) -> Self { Self::from_f32_bits(v.to_bits()) }
+    #[inline(always)] pub fn as_f32(self) -> f32 { f32::from_bits(self.as_f32_bits()) }
+    #[inline(always)] pub fn from_f64(v: f64) -> Self { Self::from_f64_bits(v.to_bits()) }
+    #[inline(always)] pub fn as_f64(self) -> f64 { f64::from_bits(self.as_f64_bits()) }
 }
 
 #[derive(Debug)]
@@ -169,9 +169,9 @@ thread_local! {
 }
 
 pub struct WasmTable {
-    elements: Vec<FuncRef>,  // Changed to FuncRef for automatic refcounting
-    pub current: u32,
-    pub maximum: u32,
+    elements: Vec<FuncRef>,
+    current: u32,
+    maximum: u32,
 }
 
 impl WasmTable {
@@ -192,11 +192,13 @@ impl WasmTable {
         self.current = new_current;
         old
     }
+    #[inline(always)]
     pub fn get(&self, idx: u32) -> Result<WasmValue, &'static str> {
         let i = idx as usize;
         if i >= self.elements.len() { return Err(OOB_TABLE_ACCESS); }
         Ok(WasmValue::from_u64(self.elements[i].as_raw()))
     }
+    #[inline(always)]
     pub fn set(&mut self, idx: u32, value: WasmValue) -> Result<(), &'static str> {
         let i = idx as usize;
         if i >= self.elements.len() { return Err(OOB_TABLE_ACCESS); }
@@ -233,6 +235,7 @@ pub enum RuntimeFunction {
 }
 
 impl RuntimeFunction {
+    #[inline(always)]
     pub fn signature(&self) -> RuntimeSignature {
         match self {
             RuntimeFunction::OwnedWasm { runtime_sig, .. } => *runtime_sig,
@@ -241,6 +244,7 @@ impl RuntimeFunction {
         }
     }
     
+    #[inline(always)]
     pub fn param_count(&self) -> usize {
         self.signature().n_params() as usize
     }
@@ -288,11 +292,6 @@ pub struct Instance {
 }
 
 impl Instance {
-    pub fn new(module: Rc<Module>) -> Self {
-        // Other than the validated module, everything starts empty
-        Self { module, ..Default::default() }
-    }
-
     /// Register or re-register an instance, used for testing when wrapping in a new Rc
     pub fn register_external_instance(inst: &Rc<Instance>) {
         // This updates the registry entry even if the instance was already registered
@@ -302,7 +301,7 @@ impl Instance {
     pub fn instantiate(module: Rc<Module>, imports: &Imports) -> Result<Self, Error> {
         // Build the instance inside a Rc so we can register a Weak handle
         // for cross-instance func_ref dispatch even if instantiation ultimately fails.
-        let mut inst_rc = Rc::new(Instance::new(module.clone()));
+        let mut inst_rc = Rc::new(Instance { module: module.clone(), ..Default::default() });
         {
             // Configure the instance while we hold the only strong Rc
             let inst = Rc::get_mut(&mut inst_rc).expect("sole owner expected");
@@ -310,7 +309,7 @@ impl Instance {
 
             // Memory
             if let Some(memory) = &module.memory {
-                if let Some(import_ref) = memory.import.clone() {
+                if let Some(import_ref) = &memory.import {
                     let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::link(UNKNOWN_IMPORT))?;
                     match imported {
                         ExportValue::Memory(mem) => {
@@ -328,7 +327,7 @@ impl Instance {
 
             // Tables
             if let Some(table) = &module.table {
-                if let Some(import_ref) = table.import.clone() {
+                if let Some(import_ref) = &table.import {
                     let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::link(UNKNOWN_IMPORT))?;
                     match imported {
                         ExportValue::Table(tab) => {
@@ -347,7 +346,7 @@ impl Instance {
             // Functions
             inst.functions.reserve(module.functions.len());
             for function in &module.functions {
-                if let Some(import_ref) = function.import.clone() {
+                if let Some(import_ref) = &function.import {
                     let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::link(UNKNOWN_IMPORT))?;
                     let runtime_sig = RuntimeSignature::from_signature(&function.ty);
                     match imported {
@@ -370,7 +369,7 @@ impl Instance {
             // Globals
             inst.globals.reserve(module.globals.len());
             for g in &module.globals {
-                if let Some(import_ref) = g.import.clone() {
+                if let Some(import_ref) = &g.import {
                     let imported = imports.get(&import_ref.module).and_then(|m| m.get(&import_ref.field)).ok_or(Error::link(UNKNOWN_IMPORT))?;
                     match imported {
                         ExportValue::Global(gl) => {
@@ -388,14 +387,14 @@ impl Instance {
                 }
             }
 
-            let mut collected_elements: Option<Vec<(u32, Vec<u32>)>> = None;
+            // Collect element segments (validate bounds, defer writes)
+            let mut collected_elements: Vec<(u32, Vec<u32>)> = Vec::new();
             if module.element_count > 0 {
                 if inst.table.is_none() { return Err(Error::link(UNKNOWN_TABLE)); }
                 let bytes = &module.bytes;
                 let mut it = module.element_start;
-                let n_segments: u32 = module.element_count;
-                let mut collected: Vec<(u32, Vec<u32>)> = Vec::with_capacity(n_segments as usize);
-                for _ in 0..n_segments {
+                collected_elements.reserve(module.element_count as usize);
+                for _ in 0..module.element_count {
                     let flags: u32 = read_leb128(bytes, &mut it)?;
                     if flags != 0 { return Err(Error::malformed(INVALID_VALUE_TYPE)); }
                     let offset = Instance::eval_const(&module, &mut it, &inst.globals)?.as_u32();
@@ -412,15 +411,13 @@ impl Instance {
                         let func_idx: u32 = read_leb128(bytes, &mut it)?;
                         indices.push(func_idx);
                     }
-                    collected.push((offset, indices));
+                    collected_elements.push((offset, indices));
                 }
-                collected_elements = Some(collected);
             }
 
-            // Validate and collect data segments (no writes yet)
-            let mut pending_data: Option<Vec<(u32, Vec<u8>)>> = None;
+            // Validate data segments (bounds check, defer writes)
+            let mut pending_data: Vec<(u32, Vec<u8>)> = Vec::new();
             if let Some(mem) = &inst.memory {
-                let mut pending: Vec<(u32, Vec<u8>)> = Vec::new();
                 for seg in &module.data_segments {
                     let mut ip = seg.initializer_offset;
                     let offset = Instance::eval_const(&module, &mut ip, &inst.globals)?.as_u32();
@@ -431,21 +428,17 @@ impl Instance {
                         return Err(Error::link(DATA_SEG_DNF));
                     }
                     drop(m);
-                    pending.push((offset, bytes_vec));
-                }
-                if !pending.is_empty() {
-                    pending_data = Some(pending);
+                    pending_data.push((offset, bytes_vec));
                 }
             }
 
             // Apply element segments now that data segments have been validated
-            if let Some(collected) = collected_elements {
+            if !collected_elements.is_empty() {
                 let table_rc = inst.table.as_ref().ok_or(Error::link(UNKNOWN_TABLE))?.clone();
-                for (offset, indices) in collected.iter() {
+                for (offset, indices) in &collected_elements {
                     for (j, idx) in indices.iter().enumerate() {
                         let func_idx = *idx as usize;
-                        let f = inst.functions[func_idx].clone();
-                        let (owner_id, owner_func_idx) = match &f {
+                        let (owner_id, owner_func_idx) = match &inst.functions[func_idx] {
                             RuntimeFunction::ImportedWasm { owner, function_index, .. } => {
                                 if let Some(owner_rc) = owner.upgrade() { (owner_rc.id, *function_index as u32) } else { (inst.id, func_idx as u32) }
                             }
@@ -461,12 +454,10 @@ impl Instance {
             }
 
             // Apply data segments (writes), after elements
-            if let (Some(mem), Some(pending)) = (&inst.memory, pending_data) {
-                if !pending.is_empty() {
-                    let mut m = mem.borrow_mut();
-                    for (offset, bytes_vec) in pending.into_iter() {
-                        m.write_bytes(offset, &bytes_vec).map_err(Error::trap)?;
-                    }
+            if let Some(mem) = &inst.memory {
+                let mut m = mem.borrow_mut();
+                for (offset, bytes_vec) in &pending_data {
+                    m.write_bytes(*offset, bytes_vec).map_err(Error::trap)?;
                 }
             }
 
@@ -491,8 +482,8 @@ impl Instance {
         InstanceManager::with(|mgr| mgr.register_instance(&inst_rc));
 
         // Start
-        if module.start != u32::MAX {
-            let fi = module.start as usize;
+        if let Some(start_idx) = module.start {
+            let fi = start_idx as usize;
             let function = &inst_rc.functions[fi];
             if function.signature().n_params() != 0 || function.signature().has_result() { return Err(Error::validation(START_FUNC)); }
             let mut stack = Vec::with_capacity(64);
@@ -636,36 +627,61 @@ impl Instance {
         func_bases: &mut Vec<usize>,
         ctrl_bases: &mut Vec<usize>
     ) -> Result<(), Error> {
-        let bytes = &self.module.bytes;
+        let bytes: &[u8] = &self.module.bytes;
         let mem = self.memory.as_ref();
         let tab = self.table.as_ref();
+        let mut current_base = *func_bases.last().unwrap();
 
         macro_rules! next_op { () => {{ let byte = unsafe { *bytes.get_unchecked(pc) }; pc += 1; byte }} }
         macro_rules! pop_val { () => {{
             match stack.pop() { Some(v) => v, None => return Err(Error::trap(STACK_UNDERFLOW)) }
         }} }
+        macro_rules! overwrite {
+            ($val:expr) => {{
+                let len = stack.len();
+                *unsafe { stack.get_unchecked_mut(len - 1) } = $val;
+            }}
+        }
+        macro_rules! peek_one {
+            ($type:ident) => {{
+                paste! {
+                    let len = stack.len();
+                    if len < 1 { return Err(Error::trap(STACK_UNDERFLOW)); }
+                    unsafe { stack.get_unchecked(len - 1) }.[<as_ $type>]()
+                }
+            }}
+        }
+        macro_rules! peek_two {
+            ($type:ident) => {{
+                paste! {
+                    let len = stack.len();
+                    if len < 2 { return Err(Error::trap(STACK_UNDERFLOW)); }
+                    let a = unsafe { stack.get_unchecked(len - 2) }.[<as_ $type>]();
+                    let b = unsafe { stack.get_unchecked(len - 1) }.[<as_ $type>]();
+                    unsafe { stack.set_len(len - 1); }
+                    (a, b)
+                }
+            }}
+        }
         macro_rules! binary {
             ($type:ident, $op:tt) => {{
                 paste! {
-                    let b = pop_val!().[<as_ $type>]();
-                    let a = pop_val!().[<as_ $type>]();
-                    stack.push(WasmValue::[<from_ $type>](a $op b));
+                    let (a, b) = peek_two!($type);
+                    overwrite!(WasmValue::[<from_ $type>](a $op b));
                 }
             }};
             ($type:ident, .$method:ident) => {{
                 paste! {
-                    let b = pop_val!().[<as_ $type>]();
-                    let a = pop_val!().[<as_ $type>]();
-                    stack.push(WasmValue::[<from_ $type>](a.$method(b)));
+                    let (a, b) = peek_two!($type);
+                    overwrite!(WasmValue::[<from_ $type>](a.$method(b)));
                 }
             }};
         }
         macro_rules! compare {
             ($type:ident, $op:tt) => {{
                 paste! {
-                    let b = pop_val!().[<as_ $type>]();
-                    let a = pop_val!().[<as_ $type>]();
-                    stack.push(WasmValue::from_u32((a $op b) as u32));
+                    let (a, b) = peek_two!($type);
+                    overwrite!(WasmValue::from_u32((a $op b) as u32));
                 }
             }};
         }
@@ -700,8 +716,8 @@ impl Instance {
         macro_rules! unary {
             ($type:ident, $f:expr) => {{
                 paste! {
-                    let a = pop_val!().[<as_ $type>]();
-                    stack.push(WasmValue::[<from_ $type>]($f(a)));
+                    let a = peek_one!($type);
+                    overwrite!(WasmValue::[<from_ $type>]($f(a)));
                 }
             }};
         }
@@ -750,7 +766,7 @@ impl Instance {
         macro_rules! nearest {
             ($type:ident) => {{
                 paste! {
-                    let x = stack.pop().unwrap().[<as_ $type>]();
+                    let x = peek_one!($type);
                     let y = if x.is_nan() || x.is_infinite() {
                         x
                     } else {
@@ -766,25 +782,25 @@ impl Instance {
                             if (lower % 2.0) == 0.0 { lower } else { upper }
                         }
                     };
-                    stack.push(WasmValue::[<from_ $type>](y));
+                    overwrite!(WasmValue::[<from_ $type>](y));
                 }
             }};
         }
         macro_rules! convert {
             ($src_type:ident -> $dst_type:ident) => {{
                 paste! {
-                    let v = stack.pop().unwrap().[<as_ $src_type>]();
-                    stack.push(WasmValue::[<from_ $dst_type>](v as $dst_type));
+                    let v = peek_one!($src_type);
+                    overwrite!(WasmValue::[<from_ $dst_type>](v as $dst_type));
                 }
             }};
         }
         macro_rules! trunc {
             ($src_type:ident -> $dst_type:ident : $min:expr, $max:expr) => {{
                 paste! {
-                    let x = stack.pop().unwrap().[<as_ $src_type>]();
+                    let x = peek_one!($src_type);
                     if !x.is_finite() {
                         if x.is_nan() {
-            return Err(Error::trap(INVALID_CONV_TO_INT));
+                            return Err(Error::trap(INVALID_CONV_TO_INT));
                         } else {
                             return Err(Error::trap(INTEGER_OVERFLOW));
                         }
@@ -792,7 +808,7 @@ impl Instance {
                     if x <= $min || x >= $max {
                         return Err(Error::trap(INTEGER_OVERFLOW));
                     }
-                    stack.push(WasmValue::[<from_ $dst_type>](x as $dst_type));
+                    overwrite!(WasmValue::[<from_ $dst_type>](x as $dst_type));
                 }
             }};
         }
@@ -913,6 +929,7 @@ impl Instance {
                             }
                             ctrl_bases.pop();
                             let _ = func_bases.pop();
+                            current_base = *func_bases.last().unwrap();
                             continue; // Skip the regular block logic
                         }
                     }
@@ -941,14 +958,7 @@ impl Instance {
                 }
                 0x0e => { // br_table
                     let v = pop_val!().as_u32();
-                    let n_targets: u32 = read_leb128(bytes, &mut pc)?;
-                    let mut depth = u32::MAX;
-                    for i in 0..n_targets {
-                        let t: u32 = read_leb128(bytes, &mut pc)?;
-                        if i == v { depth = t; }
-                    }
-                    let default_t: u32 = read_leb128(bytes, &mut pc)?;
-                    if depth == u32::MAX { depth = default_t; }
+                    let depth = self.module.side_table.lookup_br_table(pc, v).unwrap();
                     if Instance::branch(&mut pc, stack, control, depth) { return Ok(()); }
                 }
                 0x0f => { // return
@@ -962,6 +972,7 @@ impl Instance {
                     }
                     ctrl_bases.pop();
                     let _ = func_bases.pop();
+                    current_base = *func_bases.last().unwrap();
                 }
                 // Call instructions
                 0x10 => { // call
@@ -974,6 +985,7 @@ impl Instance {
                     match f {
                         RuntimeFunction::OwnedWasm { runtime_sig, pc_start, locals_count } => {
                             pc = Self::setup_wasm_function_call(*runtime_sig, *pc_start, *locals_count, stack, control, func_bases, ctrl_bases, pc)?;
+                            current_base = *func_bases.last().unwrap();
                         }
                         RuntimeFunction::ImportedWasm { owner, function_index, runtime_sig } => {
                             if let Some(owner_rc) = owner.upgrade() {
@@ -987,7 +999,7 @@ impl Instance {
                                 let mut func_bases_nested: Vec<usize> = Vec::new();
                                 let mut ctrl_bases_nested = vec![];
                                 owner_rc.call_function_idx(*function_index, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut func_bases_nested, &mut ctrl_bases_nested)?;
-                                for v in tmp_stack { stack.push(v); }
+                                stack.extend(tmp_stack);
                             } else {
                                 return Err(Error::trap(FUNC_NO_IMPL));
                             }
@@ -1009,10 +1021,7 @@ impl Instance {
                     // Here we must parse the indices
                     let type_idx: u32 = read_leb128(bytes, &mut pc)?;
                     pc += 1; // Skip the zero flag
-                    let elem_idx = match stack.pop() {
-                        Some(v) => v.as_u32(),
-                        None => return Err(Error::trap(STACK_UNDERFLOW))
-                    };
+                    let elem_idx = pop_val!().as_u32();
                     let table_rc = match tab {
                         Some(t) => t,
                         None => return Err(Error::trap(UNDEF_ELEM))
@@ -1056,7 +1065,7 @@ impl Instance {
                                     let mut ctrl_bases_nested = vec![];
                                     match owner.call_function_idx(func_idx, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut func_bases_nested, &mut ctrl_bases_nested) {
                                         Ok(()) => {
-                                            for v in tmp_stack { stack.push(v); }
+                                            stack.extend(tmp_stack);
                                             dispatched = true;
                                         }
                                         Err(_e) => {}
@@ -1074,7 +1083,7 @@ impl Instance {
                         }
                     }
 
-                    let callee = self.functions[func_idx].clone();
+                    let callee = &self.functions[func_idx];
                     if callee.signature() != expected {
                         return Err(Error::trap(INDIRECT_CALL_MISMATCH));
                     }
@@ -1091,14 +1100,15 @@ impl Instance {
                                 let mut ret_pc_nested = 0usize;
                                 let mut func_bases_nested: Vec<usize> = Vec::new();
                                 let mut ctrl_bases_nested = vec![];
-                                owner_rc.call_function_idx(function_index, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut func_bases_nested, &mut ctrl_bases_nested)?;
-                                for v in tmp_stack { stack.push(v); }
+                                owner_rc.call_function_idx(*function_index, &mut ret_pc_nested, &mut tmp_stack, &mut control_nested, &mut func_bases_nested, &mut ctrl_bases_nested)?;
+                                stack.extend(tmp_stack);
                             } else {
                                 return Err(Error::trap(FUNC_NO_IMPL));
                             }
                         }
                         RuntimeFunction::OwnedWasm { runtime_sig, pc_start, locals_count } => {
-                            pc = Self::setup_wasm_function_call(runtime_sig, pc_start, locals_count, stack, control, func_bases, ctrl_bases, pc)?;
+                            pc = Self::setup_wasm_function_call(*runtime_sig, *pc_start, *locals_count, stack, control, func_bases, ctrl_bases, pc)?;
+                            current_base = *func_bases.last().unwrap();
                         }
                         RuntimeFunction::Host { callback, runtime_sig } => {
                             let param_count = runtime_sig.n_params() as usize;
@@ -1114,40 +1124,24 @@ impl Instance {
                 }
                 // Parametric instructions
                 0x1a => { // drop
-                    if stack.pop().is_none() {
-                        return Err(Error::trap(STACK_UNDERFLOW));
-                    }
+                    pop_val!();
                 }
                 0x1b => { // select
-                    let cond = match stack.pop() {
-                        Some(v) => v.as_u32(),
-                        None => return Err(Error::trap(STACK_UNDERFLOW))
-                    };
-                    let v2 = match stack.pop() {
-                        Some(v) => v,
-                        None => return Err(Error::trap(STACK_UNDERFLOW))
-                    };
-                    let v1 = match stack.pop() {
-                        Some(v) => v,
-                        None => return Err(Error::trap(STACK_UNDERFLOW))
-                    };
+                    let cond = pop_val!().as_u32();
+                    let v2 = pop_val!();
+                    let v1 = pop_val!();
                     stack.push(if cond != 0 { v1 } else { v2 });
                 }
                 // Variable instructions
                 0x20 => { // local.get
                     let local: u32 = read_leb128(bytes, &mut pc)?;
-                    let base = *func_bases.last().unwrap();
-                    let i = base + local as usize;
+                    let i = current_base + local as usize;
                     stack.push(stack[i]);
                 }
                 0x21 => { // local.set
                     let local: u32 = read_leb128(bytes, &mut pc)?;
-                    let val = match stack.pop() {
-                        Some(v) => v,
-                        None => return Err(Error::trap(STACK_UNDERFLOW))
-                    };
-                    let base = *func_bases.last().unwrap();
-                    let i = base + local as usize;
+                    let val = pop_val!();
+                    let i = current_base + local as usize;
                     stack[i] = val;
                 }
                 0x22 => { // local.tee
@@ -1156,8 +1150,7 @@ impl Instance {
                         Some(v) => *v,
                         None => return Err(Error::trap(STACK_UNDERFLOW))
                     };
-                    let base = *func_bases.last().unwrap();
-                    let i = base + local as usize;
+                    let i = current_base + local as usize;
                     stack[i] = val;
                 }
                 0x23 => { // global.get
@@ -1169,13 +1162,7 @@ impl Instance {
                 }
                 0x24 => { // global.set
                     let gi: u32 = read_leb128(bytes, &mut pc)?;
-                    if gi as usize >= self.globals.len() {
-                        return Err(Error::trap(UNKNOWN_GLOBAL));
-                    }
-                    let val = match stack.pop() {
-                        Some(v) => v,
-                        None => return Err(Error::trap(STACK_UNDERFLOW))
-                    };
+                    let val = pop_val!();
                     self.globals[gi as usize].value.set(val);
                 }
                 // Memory instructions - loads
@@ -1206,18 +1193,13 @@ impl Instance {
                 // Memory instructions - size/grow
                 0x3f => { // memory.size
                     pc += 1; // Skip zero flag
-                    let mem = mem
-        .ok_or(Error::validation(UNKNOWN_MEMORY))?;
+                    let mem = mem.ok_or(Error::validation(UNKNOWN_MEMORY))?;
                     stack.push(WasmValue::from_u32(mem.borrow().size()));
                 }
                 0x40 => { // memory.grow
                     pc += 1; // Skip zero flag
-                    let delta = match stack.pop() {
-                        Some(v) => v.as_u32(),
-                        None => return Err(Error::trap(STACK_UNDERFLOW))
-                    };
-                    let mem = mem
-        .ok_or(Error::validation(UNKNOWN_MEMORY))?;
+                    let delta = pop_val!().as_u32();
+                    let mem = mem.ok_or(Error::validation(UNKNOWN_MEMORY))?;
                     let old = mem.borrow_mut().grow(delta);
                     stack.push(WasmValue::from_u32(old));
                 }
@@ -1229,11 +1211,13 @@ impl Instance {
                     stack.push(WasmValue::from_i64(read_sleb128::<i64>(bytes, &mut pc)?));
                 }
                 0x43 => { // f32.const
-                    stack.push(WasmValue::from_f32_bits(u32::from_le_bytes(bytes[pc..pc+4].try_into().unwrap())));
+                    let bits = unsafe { (bytes.as_ptr().add(pc) as *const u32).read_unaligned() };
+                    stack.push(WasmValue::from_f32_bits(u32::from_le(bits)));
                     pc += 4;
                 }
                 0x44 => { // f64.const
-                    stack.push(WasmValue::from_f64_bits(u64::from_le_bytes(bytes[pc..pc+8].try_into().unwrap())));
+                    let bits = unsafe { (bytes.as_ptr().add(pc) as *const u64).read_unaligned() };
+                    stack.push(WasmValue::from_f64_bits(u64::from_le(bits)));
                     pc += 8;
                 }
                 // Numeric instructions - i32 comparison
@@ -1250,8 +1234,8 @@ impl Instance {
                 0x4f => { compare!(u32, >=); } // i32.ge_u
                 // Numeric instructions - i64 comparison
                 0x50 => { // i64.eqz
-                    let v = pop_val!().as_u64();
-                    stack.push(WasmValue::from_u32((v == 0) as u32));
+                    let v = peek_one!(u64);
+                    overwrite!(WasmValue::from_u32((v == 0) as u32));
                 }
                 0x51 => { compare!(i64, ==); } // i64.eq
                 0x52 => { compare!(i64, !=); } // i64.ne
@@ -1405,7 +1389,7 @@ impl Instance {
         if n_params != args.len() { return Err(Error::trap(INVALID_NUM_ARG)); }
 
         let mut stack: Vec<WasmValue> = Vec::with_capacity(1024);
-        for v in args { stack.push(*v); }
+        stack.extend_from_slice(args);
         let mut control: Vec<ControlFrame> = Vec::new();
         let mut func_bases: Vec<usize> = Vec::new();
         let return_pc: usize = 0;
