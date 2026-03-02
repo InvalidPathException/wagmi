@@ -29,28 +29,27 @@ Examples:
 struct Args {
     /// Path(s) to WebAssembly module file(s)
     wasm_files: Vec<PathBuf>,
-    
+
     /// Show verbose validation details
     #[arg(short, long)]
     verbose: bool,
-    
+
     /// Quiet mode - only show errors
     #[arg(short, long)]
     quiet: bool,
 }
 
-fn validate_file(path: &PathBuf, verbose: bool, quiet: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn v_file(path: &PathBuf, verbose: bool, quiet: bool) -> Result<(), Box<dyn std::error::Error>> {
     if verbose {
         println!("Validating: {}", path.display());
     }
-    
-    let bytes = fs::read(path)
-        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    
+
+    let bytes = fs::read(path).map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+
     if verbose {
         println!("  Size: {} bytes", bytes.len());
     }
-    
+
     match Module::compile(bytes) {
         Ok(mut module) => {
             if verbose {
@@ -58,13 +57,11 @@ fn validate_file(path: &PathBuf, verbose: bool, quiet: bool) -> Result<(), Box<d
                 println!("  Functions: {}", module.functions.len());
                 println!("  Exports: {}", module.exports.len());
                 if !module.imports.is_empty() {
-                    let import_count: usize = module.imports.values()
-                        .map(|m| m.len())
-                        .sum();
+                    let import_count: usize = module.imports.values().map(|m| m.len()).sum();
                     println!("  Imports: {}", import_count);
                 }
             }
-            
+
             let func_count = module.functions.len();
             let mut imported_idxs = Vec::new();
             for (idx, func) in module.functions.iter().enumerate() {
@@ -72,54 +69,52 @@ fn validate_file(path: &PathBuf, verbose: bool, quiet: bool) -> Result<(), Box<d
                     imported_idxs.push(idx);
                 }
             }
-            
+
             let mut validator = Validator::new(&mut module);
-            
+
             for idx in 0..func_count {
                 if imported_idxs.contains(&idx) {
                     continue;
                 }
-                
+
                 if verbose {
                     println!("  Validating function {}", idx);
                 }
-                
-                if let Err(e) = validator.validate_function(idx) {
+
+                if let Err(e) = validator.v_function(idx) {
                     return Err(format!("Validation failed for function {}: {:?}", idx, e).into());
                 }
             }
-            
+
             if !quiet {
                 println!("VALID: {}", path.display());
             }
             Ok(())
         }
-        Err(e) => {
-            Err(format!("INVALID: {} - {:?}", path.display(), e).into())
-        }
+        Err(e) => Err(format!("INVALID: {} - {:?}", path.display(), e).into()),
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    
+
     if args.wasm_files.is_empty() {
         eprintln!("Error: No WebAssembly files specified");
         eprintln!("Usage: wagmi-validate <WASM_FILES>...");
         std::process::exit(1);
     }
-    
+
     let mut all_valid = true;
     let mut errors = Vec::new();
-    
+
     for path in &args.wasm_files {
         if !path.exists() {
             eprintln!("ERROR: {} - File not found", path.display());
             all_valid = false;
             continue;
         }
-        
-        match validate_file(path, args.verbose, args.quiet) {
+
+        match v_file(path, args.verbose, args.quiet) {
             Ok(()) => {
                 if args.verbose && args.wasm_files.len() > 1 {
                     println!();
@@ -131,14 +126,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    
+
     if !errors.is_empty() {
         eprintln!("\nValidation errors:");
         for error in &errors {
             eprintln!("{}", error);
         }
     }
-    
+
     if args.wasm_files.len() > 1 && !args.quiet {
         println!("\nSummary:");
         let valid_count = args.wasm_files.len() - errors.len();
@@ -147,7 +142,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  Invalid: {}/{}", errors.len(), args.wasm_files.len());
         }
     }
-    
+
     if all_valid {
         Ok(())
     } else {

@@ -9,9 +9,7 @@ This file documents the coremark bench results to keep track of performance impr
     - repr(C) for the SideTableEntry struct caused mysterious improvements, not sure if it is a fluke
 - cc02503: avg = 855.71814, n = 20 (remove defensive malformed check in main loop)
     - since the module is already validated at run time, there is no reason for the check to exist, it was a remnant of early development phase that lacked proper handling for some malformed modules
-- current: no significant difference
-
-On nightly, the performance is slightly better (sometimes reaching 900)
+- current: avg = 948.285031, n = 20 (use peek for stack access, reorganization and simplifications)
 
 Next step: use direct threading to improve branch prediction 
 
@@ -28,6 +26,6 @@ wasmi: ~1700
 tinywasm: ~630
 
 Goal:
-We expect/hope to reach ~1200 after threaded dispatch implementation. It seems like Ben Titzer only reached performance comparable to production-ready, optimizing interpreters through manually crafted assembly code for hot paths. 
+I expect/hope to reach ~1200 after threaded dispatch implementation. It seems like Ben Titzer only reached performance comparable to production-ready, optimizing interpreters through manually crafted assembly code for hot paths. 
 
-Higher performance may not be pursued after the point and instead I might focus on adding more instructions to achieve Wasm 2.0 spec parity (should be easy with AI).
+Higher performance may not be pursued after the point and instead I might focus on adding more instructions to achieve Wasm 2.0 spec parity.

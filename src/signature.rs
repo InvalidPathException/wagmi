@@ -12,7 +12,9 @@ pub enum ValType {
 }
 
 #[inline(always)]
-pub fn is_val_type(byte: u8) -> bool { matches!(byte, 0x7c..=0x7f) }
+pub fn is_val_type(byte: u8) -> bool {
+    matches!(byte, 0x7c..=0x7f)
+}
 
 #[inline]
 pub fn val_type_from_byte(byte: u8) -> Option<ValType> {
@@ -35,7 +37,9 @@ pub struct Signature {
 impl Signature {
     pub fn read(types: &[Signature], bytes: &[u8], idx: &mut usize) -> Result<Signature, Error> {
         const VOID: u8 = 0x40;
-        if *idx >= bytes.len() { return Err(Error::malformed(UNEXPECTED_END)); }
+        if *idx >= bytes.len() {
+            return Err(Error::malformed(UNEXPECTED_END));
+        }
         let byte = bytes[*idx];
         if byte == VOID {
             *idx += 1;
@@ -57,10 +61,13 @@ impl Signature {
 #[derive(Copy, Clone, Eq, PartialEq, Default)]
 pub struct RuntimeSignature(u32);
 
+#[rustfmt::skip]
 impl RuntimeSignature {
     const HAS_RESULT: u32 = 1 << 16;
-    const HAS_I32: u32 = 1 << 17; const HAS_I64: u32 = 1 << 18;
-    const HAS_F32: u32 = 1 << 19; const HAS_F64: u32 = 1 << 20;
+    const HAS_I32:    u32 = 1 << 17;
+    const HAS_I64:    u32 = 1 << 18;
+    const HAS_F32:    u32 = 1 << 19;
+    const HAS_F64:    u32 = 1 << 20;
 
     #[inline(always)] pub fn n_params(&self) -> u32 { self.0 & 0xFFFF }
     #[inline(always)] pub fn has_result(&self) -> bool { (self.0 & Self::HAS_RESULT) != 0 }
@@ -68,20 +75,30 @@ impl RuntimeSignature {
     #[inline(always)] pub fn has_i64(&self) -> bool { (self.0 & Self::HAS_I64) != 0 }
     #[inline(always)] pub fn has_f32(&self) -> bool { (self.0 & Self::HAS_F32) != 0 }
     #[inline(always)] pub fn has_f64(&self) -> bool { (self.0 & Self::HAS_F64) != 0 }
+}
 
+impl RuntimeSignature {
     #[inline(always)]
     pub fn from_signature(sig: &Signature) -> Self {
         let mut bits: u32 = (sig.params.len() as u32) & 0xFFFF;
-        if sig.result.is_some() { bits |= Self::HAS_RESULT; }
-        for &param in &sig.params { set_type_bit32(&mut bits, param); }
-        if let Some(res) = sig.result { set_type_bit32(&mut bits, res); }
+        if sig.result.is_some() {
+            bits |= Self::HAS_RESULT;
+        }
+        for &param in &sig.params {
+            set_type_bit32(&mut bits, param);
+        }
+        if let Some(res) = sig.result {
+            set_type_bit32(&mut bits, res);
+        }
         RuntimeSignature(bits)
     }
 
     #[inline(always)]
     pub fn from_counts(n_params: u32, has_result: bool) -> Self {
         let mut bits: u32 = n_params & 0xFFFF;
-        if has_result { bits |= Self::HAS_RESULT; }
+        if has_result {
+            bits |= Self::HAS_RESULT;
+        }
         RuntimeSignature(bits)
     }
 
@@ -90,9 +107,15 @@ impl RuntimeSignature {
         let base = Self::from_counts(n_params, has_result);
         base.with_presence()
     }
-    
-    #[inline(always)] pub fn with_presence(self) -> Self { RuntimeSignature(self.0 | (1 << 31)) }
-    #[inline(always)] pub fn is_present(&self) -> bool { (self.0 & (1 << 31)) != 0 }
+
+    #[inline(always)]
+    pub fn with_presence(self) -> Self {
+        RuntimeSignature(self.0 | (1 << 31))
+    }
+    #[inline(always)]
+    pub fn is_present(&self) -> bool {
+        (self.0 & (1 << 31)) != 0
+    }
 }
 
 #[inline(always)]

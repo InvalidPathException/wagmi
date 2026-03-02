@@ -13,8 +13,8 @@ Based on the [original paper by Ben L. Titzer](https://www.cs.tufts.edu/comp/150
   - `wasm_memory.rs` - Linear memory management
   - `signature.rs` - Function signature handling
   - `leb128.rs` - LEB128 encoding/decoding utilities
-  - `byte_iter.rs` - Byte stream iteration helpers
   - `error.rs` - Error types and handling
+  - `opcodes.rs` - Opcode constants
   - `lib.rs` - Library entry point
   - `/bin` - Example usage demonstrations
 - `/tests` - Tests

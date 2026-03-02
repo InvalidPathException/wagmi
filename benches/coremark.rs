@@ -7,10 +7,8 @@ use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use wagmi::{ExportValue, Imports, Instance, Module, RuntimeFunction, ValType, WasmValue};
 
 fn clock_ms_i64() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("Clock may have gone backwards")
-        .as_millis() as i64
+    SystemTime::now().duration_since(UNIX_EPOCH).expect("Clock may have gone backwards").as_millis()
+        as i64
 }
 
 fn setup_instance() -> (Instance, wagmi::RuntimeFunction) {
@@ -41,12 +39,16 @@ fn bench_coremark(c: &mut Criterion) {
     let results_once = instance.invoke(&run_fn, &[]).expect("invoke run once");
     let elapsed_once = t0.elapsed();
     let score_once = results_once[0].as_f32();
-    println!("coremark single-run: elapsed={:.6}s score={}", elapsed_once.as_secs_f64(), score_once);
+    println!(
+        "coremark single-run: elapsed={:.6}s score={}",
+        elapsed_once.as_secs_f64(),
+        score_once
+    );
 
     let mut group = c.benchmark_group("coremark_minimal");
     let mut scores: Vec<f32> = Vec::new();
     group.sample_size(10);
-    group.measurement_time(Duration::from_secs(600));
+    group.measurement_time(Duration::from_secs(150));
     group.warm_up_time(Duration::from_secs(1));
     group.throughput(Throughput::Elements(1));
     group.bench_function("run", |b| {
@@ -73,5 +75,3 @@ fn bench_coremark(c: &mut Criterion) {
 
 criterion_group!(benches, bench_coremark);
 criterion_main!(benches);
-
-

@@ -1,0 +1,3 @@
+edition = "2021"
+use_small_heuristics = "Max"
+struct_variant_width = 40

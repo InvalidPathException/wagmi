@@ -23,17 +23,13 @@ impl Display for Error {
 
 impl std::error::Error for Error {}
 
+#[rustfmt::skip]
 impl Error {
-    #[cold] #[inline(never)]
-    pub fn malformed(msg: &'static str) -> Self { Error::Malformed(msg) }
-    #[cold] #[inline(never)]
-    pub fn validation(msg: &'static str) -> Self { Error::Validation(msg) }
-    #[cold] #[inline(never)]
-    pub fn trap(msg: &'static str) -> Self { Error::Trap(msg) }
-    #[cold] #[inline(never)]
-    pub fn link(msg: &'static str) -> Self { Error::Link(msg) }
-    #[cold] #[inline(never)]
-    pub fn uninstantiable(msg: &'static str) -> Self { Error::Uninstantiable(msg) }
+    #[cold] #[inline(never)] pub fn malformed(msg: &'static str) -> Self { Error::Malformed(msg) }
+    #[cold] #[inline(never)] pub fn validation(msg: &'static str) -> Self { Error::Validation(msg) }
+    #[cold] #[inline(never)] pub fn trap(msg: &'static str) -> Self { Error::Trap(msg) }
+    #[cold] #[inline(never)] pub fn link(msg: &'static str) -> Self { Error::Link(msg) }
+    #[cold] #[inline(never)] pub fn uninstantiable(msg: &'static str) -> Self { Error::Uninstantiable(msg) }
 }
 
 // Malformed errors
